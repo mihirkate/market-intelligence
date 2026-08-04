@@ -1,0 +1,15 @@
+[Unit]
+Description=Market Intelligence FastAPI API
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__PYTHON_BIN__ run.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

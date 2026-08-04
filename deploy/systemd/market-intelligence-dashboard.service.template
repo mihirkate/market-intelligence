@@ -1,0 +1,15 @@
+[Unit]
+Description=Market Intelligence Streamlit Dashboard
+After=network.target market-intelligence-api.service
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=/bin/bash -lc '__STREAMLIT_BIN__ run dashboard/main.py --server.address "${DASHBOARD_HOST:-0.0.0.0}" --server.port "${DASHBOARD_PORT:-8501}"'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

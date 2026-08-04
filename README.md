@@ -39,6 +39,9 @@ The runtime now expects a real MongoDB deployment via `MONGODB_URI`. For
 shared environments, keep secrets in `.env` locally and use [.env.example](/home/mihir/market-intelligence/.env.example)
 as the checked-in template.
 
+For Ubuntu server deployment with `systemd` and `cron`, see
+[deploy/README.md](/home/mihir/market-intelligence/deploy/README.md).
+
 ## Scraper Engine
 
 ```bash
