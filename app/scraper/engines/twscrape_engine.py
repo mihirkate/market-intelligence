@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from twscrape import API
+from twscrape import API, NoAccountError
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -37,7 +37,12 @@ class TwscrapeEngine(ScraperEngine):
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.adapter = adapter or TwscrapeAdapter()
-        self.api = api or API(str(settings.TWSCRAPE_ACCOUNTS_DB))
+        self.api = api or API(
+            str(settings.TWSCRAPE_ACCOUNTS_DB),
+            raise_when_no_account=True,
+            wait_timeout=settings.TWSCRAPE_WAIT_TIMEOUT,
+            wait_interval=settings.TWSCRAPE_WAIT_INTERVAL,
+        )
         self.artifact_store = artifact_store or DebugArtifactStore()
         self.lookback_hours = lookback_hours if lookback_hours is not None else settings.LOOKBACK_HOURS
         self.search_fetch_multiplier = (
@@ -205,6 +210,12 @@ class TwscrapeEngine(ScraperEngine):
                 )
                 if attempt >= self.retry_attempts:
                     break
+                if isinstance(error, NoAccountError):
+                    logger.warning(
+                        "No account available for keyword=%s; retrying after %.2fs",
+                        keyword,
+                        self._retry_delay(attempt),
+                    )
                 await asyncio.sleep(self._retry_delay(attempt))
 
         raise RuntimeError(

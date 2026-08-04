@@ -42,13 +42,15 @@ python -m app.scraper.manager
 ```
 
 The scraper runtime is configured entirely through `.env`, including the
-account DB path, keyword limits, MongoDB connection, parquet paths, and
-dashboard sampling limits.
+account DB path, keyword limits, MongoDB connection, parquet paths,
+lookback window, retry behavior, and dashboard sampling limits.
 
 ## Storage And Processing
 
 Each scrape run now:
 
+- enforces a strict rolling `LOOKBACK_HOURS` window after fetch
+- archives raw fetched tweet records as JSONL under `data/raw/date=YYYY-MM-DD/`
 - fetches all configured keywords again instead of stopping at the previous run's total
 - normalizes Unicode text with Indian-language-safe cleanup
 - computes compact hashed TF-IDF vectors plus custom market text features
@@ -57,7 +59,8 @@ Each scrape run now:
 - writes aggregated keyword signals to `data/parquet/signals/`
 
 The checkpoint file at `data/raw/checkpoint.json` is now run metadata only. It
-no longer prevents fresh collection on later runs.
+no longer prevents fresh collection on later runs. Search failures and live-run
+artifacts are written to `data/raw/debug/`.
 
 ## Twscrape Account Setup
 
@@ -85,6 +88,14 @@ MONGODB_URI=mongodb://localhost:27017/
 MONGODB_DATABASE=market-intelligence
 PARQUET_TWEETS_PATH=data/parquet/tweets
 PARQUET_SIGNALS_PATH=data/parquet/signals
+LOOKBACK_HOURS=24
+SEARCH_FETCH_MULTIPLIER=3
+SEARCH_RETRY_ATTEMPTS=3
+SEARCH_RETRY_BASE_SECONDS=2
+SEARCH_RETRY_MAX_SECONDS=20
+TWSCRAPE_WAIT_TIMEOUT=30
+TWSCRAPE_WAIT_INTERVAL=1
+DEBUG_ARTIFACTS_PATH=data/raw/debug
 X_USERNAME=your_x_handle
 X_AUTH_TOKEN=your_auth_token
 X_CT0=your_ct0_token
@@ -97,3 +108,8 @@ connection string outside source control and keep `MONGODB_DATABASE` as
 If `python -m app.scraper.twscrape_setup` fails, the current `.env` is usually
 missing all `X_*` auth fields. The setup command only seeds the local
 `data/twscrape/accounts.db` from values already present in `.env`.
+
+If `python -m app.scraper.manager` fails with `No account available for queue SearchTimeline`,
+the configured account is rate-limited. The run now fails fast after
+`TWSCRAPE_WAIT_TIMEOUT` seconds and writes a debug artifact instead of hanging
+indefinitely.
