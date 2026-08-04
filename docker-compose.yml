@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    container_name: market-intelligence-api
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    ports:
+      - "${API_PORT}:${API_PORT}"
+    command: python run.py
+
+  dashboard:
+    build: .
+    container_name: market-intelligence-dashboard
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    ports:
+      - "${DASHBOARD_PORT}:${DASHBOARD_PORT}"
+    command: streamlit run dashboard/main.py --server.address ${DASHBOARD_HOST} --server.port ${DASHBOARD_PORT}
