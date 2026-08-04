@@ -34,6 +34,8 @@ def test_checkpoint_round_trip_preserves_new_run_fields(tmp_path) -> None:
         run_id="run-2",
         last_started_at="2026-08-04T10:00:00+00:00",
         last_completed_at="2026-08-04T10:01:00+00:00",
+        cooldown_until="2026-08-04T11:00:00+00:00",
+        last_rate_limited_at="2026-08-04T10:30:00+00:00",
         last_keyword="#sensex",
         last_url="https://x.com/alice/status/2",
         tweets_collected=5,
@@ -50,6 +52,8 @@ def test_checkpoint_round_trip_preserves_new_run_fields(tmp_path) -> None:
     assert restored.run_id == "run-2"
     assert restored.last_started_at == "2026-08-04T10:00:00+00:00"
     assert restored.last_completed_at == "2026-08-04T10:01:00+00:00"
+    assert restored.cooldown_until == "2026-08-04T11:00:00+00:00"
+    assert restored.last_rate_limited_at == "2026-08-04T10:30:00+00:00"
     assert restored.tweets_updated == 3
     assert restored.parquet_rows_written == 5
     assert restored.signal_rows_written == 2

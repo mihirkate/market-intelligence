@@ -11,7 +11,7 @@ from twscrape import API, NoAccountError
 from app.core.config import TwscrapeAccountSettings, settings
 from app.core.logging import get_logger
 from app.scraper.adapters import TwscrapeAdapter
-from app.scraper.engines.base import ScraperEngine
+from app.scraper.engines.base import ScraperEngine, ScraperRateLimitError
 from app.scraper.models import TweetRecord
 from app.storage import DebugArtifactStore
 
@@ -121,6 +121,7 @@ class TwscrapeEngine(ScraperEngine):
     ) -> list[TweetRecord]:
         fetch_limit = max(limit, limit * max(1, self.search_fetch_multiplier))
         last_error: Exception | None = None
+        last_account_states: list[dict[str, object]] = []
 
         for attempt in range(1, self.retry_attempts + 1):
             try:
@@ -187,6 +188,7 @@ class TwscrapeEngine(ScraperEngine):
                 return records
             except Exception as error:  # noqa: BLE001
                 last_error = error
+                last_account_states = await self._account_snapshot()
                 artifact_path = self.artifact_store.write_event(
                     "keyword_search_failure",
                     payload={
@@ -197,7 +199,7 @@ class TwscrapeEngine(ScraperEngine):
                         "fetch_limit": fetch_limit,
                         "window_start_utc": window_start.isoformat(),
                         "window_end_utc": window_end.isoformat(),
-                        "accounts": await self._account_snapshot(),
+                        "accounts": last_account_states,
                     },
                     error=error,
                 )
@@ -219,6 +221,13 @@ class TwscrapeEngine(ScraperEngine):
                         self._retry_delay(attempt),
                     )
                 await asyncio.sleep(self._retry_delay(attempt))
+
+        if isinstance(last_error, NoAccountError):
+            raise ScraperRateLimitError(
+                f"twscrape accounts are temporarily locked for keyword={keyword!r}",
+                cooldown_until=await self._earliest_queue_unlock("SearchTimeline"),
+                account_states=last_account_states,
+            ) from last_error
 
         raise RuntimeError(
             f"twscrape search failed for keyword={keyword!r} after {self.retry_attempts} attempts"
@@ -361,6 +370,19 @@ class TwscrapeEngine(ScraperEngine):
             }
             for account in accounts
         ]
+
+    async def _earliest_queue_unlock(self, queue_name: str) -> datetime | None:
+        accounts = await self.api.pool.get_all()
+        unlocks: list[datetime] = []
+        for account in accounts:
+            lock_until = getattr(account, "locks", {}).get(queue_name)
+            if not isinstance(lock_until, datetime):
+                continue
+            if lock_until.tzinfo is None:
+                unlocks.append(lock_until.replace(tzinfo=timezone.utc))
+            else:
+                unlocks.append(lock_until.astimezone(timezone.utc))
+        return min(unlocks) if unlocks else None
 
     def _tweet_snapshot(self, tweet) -> dict[str, object]:
         return {

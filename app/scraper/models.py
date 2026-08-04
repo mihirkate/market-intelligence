@@ -121,6 +121,10 @@ class ScrapeSummary:
     """End-of-run summary for the scraper manager."""
 
     run_id: str | None = None
+    status: str = "pending"
+    cooldown_until: str | None = None
+    startup_delay_seconds: int = 0
+    rate_limit_events: int = 0
     tweets_collected: int = 0
     urls_discovered: int = 0
     tweets_updated: int = 0

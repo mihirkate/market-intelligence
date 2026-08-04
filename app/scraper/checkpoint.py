@@ -18,6 +18,8 @@ class ScrapeCheckpoint:
     run_id: str | None = None
     last_started_at: str | None = None
     last_completed_at: str | None = None
+    cooldown_until: str | None = None
+    last_rate_limited_at: str | None = None
     last_keyword: str | None = None
     last_url: str | None = None
     tweets_collected: int = 0

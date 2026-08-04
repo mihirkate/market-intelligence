@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from twscrape import NoAccountError
 
 import app.scraper.engines.twscrape_engine as twscrape_engine_module
 from app.core.config import TwscrapeAccountSettings
+from app.scraper.engines.base import ScraperRateLimitError
 from app.scraper.engines.twscrape_engine import TwscrapeEngine
 from app.storage import DebugArtifactStore
 
@@ -68,19 +70,32 @@ class FakeTweet:
 
 
 class FakeAccount:
-    def __init__(self, username: str) -> None:
+    def __init__(
+        self,
+        username: str,
+        *,
+        locks: dict[str, datetime] | None = None,
+        active: bool = True,
+        error_msg: str | None = None,
+        last_used: datetime | None = None,
+    ) -> None:
         self.username = username
+        self.locks = locks or {}
+        self.active = active
+        self.error_msg = error_msg
+        self.last_used = last_used
 
 
 class FakePool:
-    def __init__(self) -> None:
+    def __init__(self, accounts: list[FakeAccount] | None = None) -> None:
+        self.accounts = accounts or [FakeAccount("demo_account")]
         self.cookie_accounts: list[tuple[str, str]] = []
         self.credential_accounts: list[dict[str, object]] = []
         self.deleted_usernames: list[str] = []
         self.logged_in_usernames: list[str] = []
 
     async def get_all(self) -> list[FakeAccount]:
-        return [FakeAccount("demo_account")]
+        return self.accounts
 
     async def delete_accounts(self, usernames):
         if isinstance(usernames, str):
@@ -120,8 +135,8 @@ class FakePool:
 
 
 class FakeAPI:
-    def __init__(self, plans) -> None:
-        self.pool = FakePool()
+    def __init__(self, plans, *, accounts: list[FakeAccount] | None = None) -> None:
+        self.pool = FakePool(accounts=accounts)
         self._plans = list(plans)
         self.queries: list[tuple[str, int]] = []
 
@@ -212,6 +227,31 @@ def test_twscrape_engine_retries_failed_search_and_writes_artifact(tmp_path) -> 
     assert len(api.queries) == 2
     assert artifacts
     assert any("keyword_search_failure" in path.name for path in artifacts)
+
+
+def test_twscrape_engine_raises_structured_rate_limit_error_with_unlock_time(tmp_path) -> None:
+    now = datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)
+    lock_until = now + timedelta(minutes=12)
+    api = FakeAPI(
+        [NoAccountError("No account available for queue SearchTimeline")],
+        accounts=[FakeAccount("demo_account", locks={"SearchTimeline": lock_until}, last_used=now)],
+    )
+    engine = TwscrapeEngine(
+        api=api,
+        artifact_store=DebugArtifactStore(output_dir=tmp_path / "debug"),
+        retry_attempts=1,
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+        now_provider=lambda: now,
+    )
+
+    with pytest.raises(ScraperRateLimitError) as error_info:
+        engine.search("#sensex", limit=2)
+
+    error = error_info.value
+    assert error.cooldown_until == lock_until
+    assert error.account_states
+    assert error.account_states[0]["username"] == "demo_account"
 
 
 def test_twscrape_engine_bootstraps_multiple_accounts(monkeypatch: pytest.MonkeyPatch) -> None:

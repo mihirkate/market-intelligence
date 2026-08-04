@@ -56,6 +56,12 @@ def _read_csv(name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def _read_int_csv(name: str, default: str) -> tuple[int, ...]:
+    raw = _read_default(name, default)
+    values = [int(item.strip()) for item in raw.split(",") if item.strip()]
+    return tuple(values)
+
+
 @dataclass(frozen=True, slots=True)
 class TwscrapeAccountSettings:
     """One X account configuration that can seed the local twscrape pool."""
@@ -176,9 +182,25 @@ class Settings:
     SCRAPER_KEYWORDS: tuple[str, ...]
     DISCOVERY_LIMIT_PER_KEYWORD: int
     TARGET_TWEETS: int
+    MAX_TWEETS_PER_RUN: int
+    CRON_SCHEDULE: str
+    CRON_LOG_PATH: Path
+    CRON_LOCK_PATH: Path
+    RUN_STARTUP_JITTER_MIN_SECONDS: int
+    RUN_STARTUP_JITTER_MAX_SECONDS: int
+    RATE_LIMIT_COOLDOWN_MIN_SECONDS: int
+    RATE_LIMIT_COOLDOWN_MAX_SECONDS: int
     RAW_OUTPUT: Path
     CHECKPOINT_PATH: Path
     TWSCRAPE_ACCOUNTS_DB: Path
+    COLLECTION_TARGET_TWEETS_LAST_24_HOURS: int
+    COLLECTION_PROGRESS_RECENT_RUN_HOURS: int
+    COLLECTION_STATUS_REPORT_PATH: Path
+    PROCESSING_REPORT_PATH: Path
+    ANALYSIS_REPORT_PATH: Path
+    PERFORMANCE_REPORT_PATH: Path
+    REPORT_TOP_LIMIT: int
+    BENCHMARK_RECORD_COUNTS: tuple[int, ...]
     MONGODB_URI: str
     MONGODB_DATABASE: str
     MONGODB_TWEETS_COLLECTION: str
@@ -213,8 +235,14 @@ class Settings:
         self.DATA_PATH.mkdir(parents=True, exist_ok=True)
         self.RAW_OUTPUT.mkdir(parents=True, exist_ok=True)
         self.LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.CRON_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.CRON_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.TWSCRAPE_ACCOUNTS_DB.parent.mkdir(parents=True, exist_ok=True)
+        self.COLLECTION_STATUS_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.PROCESSING_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.ANALYSIS_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.PERFORMANCE_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.PARQUET_TWEETS_PATH.mkdir(parents=True, exist_ok=True)
         self.PARQUET_SIGNALS_PATH.mkdir(parents=True, exist_ok=True)
         self.DEBUG_ARTIFACTS_PATH.mkdir(parents=True, exist_ok=True)
@@ -239,9 +267,37 @@ settings = Settings(
     SCRAPER_KEYWORDS=_read_csv("SCRAPER_KEYWORDS"),
     DISCOVERY_LIMIT_PER_KEYWORD=_read_int("DISCOVERY_LIMIT_PER_KEYWORD"),
     TARGET_TWEETS=_read_int("TARGET_TWEETS"),
+    MAX_TWEETS_PER_RUN=_read_default_int("MAX_TWEETS_PER_RUN", _read_int("TARGET_TWEETS")),
+    CRON_SCHEDULE=_read_default("CRON_SCHEDULE", "*/10 * * * *"),
+    CRON_LOG_PATH=_read_default_path("CRON_LOG_PATH", "logs/cron.log"),
+    CRON_LOCK_PATH=_read_default_path("CRON_LOCK_PATH", "data/raw/cron.lock"),
+    RUN_STARTUP_JITTER_MIN_SECONDS=_read_default_int("RUN_STARTUP_JITTER_MIN_SECONDS", 0),
+    RUN_STARTUP_JITTER_MAX_SECONDS=_read_default_int("RUN_STARTUP_JITTER_MAX_SECONDS", 120),
+    RATE_LIMIT_COOLDOWN_MIN_SECONDS=_read_default_int("RATE_LIMIT_COOLDOWN_MIN_SECONDS", 1800),
+    RATE_LIMIT_COOLDOWN_MAX_SECONDS=_read_default_int("RATE_LIMIT_COOLDOWN_MAX_SECONDS", 3600),
     RAW_OUTPUT=_read_path("RAW_OUTPUT"),
     CHECKPOINT_PATH=_read_path("CHECKPOINT_PATH"),
     TWSCRAPE_ACCOUNTS_DB=_read_default_path("TWSCRAPE_ACCOUNTS_DB", "data/twscrape/accounts.db"),
+    COLLECTION_TARGET_TWEETS_LAST_24_HOURS=_read_default_int("COLLECTION_TARGET_TWEETS_LAST_24_HOURS", 2000),
+    COLLECTION_PROGRESS_RECENT_RUN_HOURS=_read_default_int("COLLECTION_PROGRESS_RECENT_RUN_HOURS", 6),
+    COLLECTION_STATUS_REPORT_PATH=_read_default_path(
+        "COLLECTION_STATUS_REPORT_PATH",
+        "reports/data_collection_status.json",
+    ),
+    PROCESSING_REPORT_PATH=_read_default_path(
+        "PROCESSING_REPORT_PATH",
+        "reports/processing_report.json",
+    ),
+    ANALYSIS_REPORT_PATH=_read_default_path(
+        "ANALYSIS_REPORT_PATH",
+        "reports/analysis_summary.json",
+    ),
+    PERFORMANCE_REPORT_PATH=_read_default_path(
+        "PERFORMANCE_REPORT_PATH",
+        "reports/performance_benchmark.json",
+    ),
+    REPORT_TOP_LIMIT=_read_default_int("REPORT_TOP_LIMIT", 10),
+    BENCHMARK_RECORD_COUNTS=_read_int_csv("BENCHMARK_RECORD_COUNTS", "100,1000,2000"),
     MONGODB_URI=_read_default("MONGODB_URI", "mongodb://localhost:27017/"),
     MONGODB_DATABASE=_read_default("MONGODB_DATABASE", "market-intelligence"),
     MONGODB_TWEETS_COLLECTION=_read_default("MONGODB_TWEETS_COLLECTION", "tweets"),
