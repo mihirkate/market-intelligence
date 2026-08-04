@@ -14,6 +14,7 @@ def main() -> None:
     settings.ensure_directories()
     configure_logging()
 
+    logger.info("Bootstrapping twscrape account pool configured_accounts=%s", len(settings.X_ACCOUNTS))
     engine = TwscrapeEngine()
     engine.bootstrap_account(force=True)
     logger.info("twscrape account bootstrap completed db=%s", settings.TWSCRAPE_ACCOUNTS_DB)

@@ -8,7 +8,7 @@ from typing import Callable
 
 from twscrape import API, NoAccountError
 
-from app.core.config import settings
+from app.core.config import TwscrapeAccountSettings, settings
 from app.core.logging import get_logger
 from app.scraper.adapters import TwscrapeAdapter
 from app.scraper.engines.base import ScraperEngine
@@ -167,6 +167,7 @@ class TwscrapeEngine(ScraperEngine):
                         record,
                         keyword=keyword,
                         query=query,
+                        fetch_limit=fetch_limit,
                         window_start=window_start,
                         window_end=window_end,
                     )
@@ -196,6 +197,7 @@ class TwscrapeEngine(ScraperEngine):
                         "fetch_limit": fetch_limit,
                         "window_start_utc": window_start.isoformat(),
                         "window_end_utc": window_end.isoformat(),
+                        "accounts": await self._account_snapshot(),
                     },
                     error=error,
                 )
@@ -229,29 +231,24 @@ class TwscrapeEngine(ScraperEngine):
         accounts = await self.api.pool.get_all()
         if accounts and not force:
             self._account_ready = True
+            logger.info(
+                "Using twscrape account pool size=%s usernames=%s",
+                len(accounts),
+                [account.username for account in accounts],
+            )
             return
 
-        if force and accounts and settings.X_USERNAME:
-            existing = [account.username for account in accounts if account.username == settings.X_USERNAME]
+        configured_accounts = settings.X_ACCOUNTS
+        configured_usernames = [account.username for account in configured_accounts]
+
+        if force and accounts and configured_usernames:
+            existing = [account.username for account in accounts if account.username in configured_usernames]
             if existing:
                 await self.api.pool.delete_accounts(existing)
+                logger.info("Removed existing twscrape accounts usernames=%s", existing)
 
-        if settings.X_USERNAME and (settings.X_COOKIES or (settings.X_AUTH_TOKEN and settings.X_CT0)):
-            cookies = settings.X_COOKIES or f"auth_token={settings.X_AUTH_TOKEN}; ct0={settings.X_CT0}"
-            await self.api.pool.add_account_cookies(settings.X_USERNAME, cookies)
-            logger.info("Configured twscrape account from cookies username=%s", settings.X_USERNAME)
-            self._account_ready = True
-            return
-
-        if all([settings.X_USERNAME, settings.X_PASSWORD, settings.X_EMAIL, settings.X_EMAIL_PASSWORD]):
-            await self.api.pool.add_account(
-                settings.X_USERNAME,
-                settings.X_PASSWORD,
-                settings.X_EMAIL,
-                settings.X_EMAIL_PASSWORD,
-            )
-            await self.api.pool.login_all(usernames=[settings.X_USERNAME])
-            logger.info("Configured twscrape account from credentials username=%s", settings.X_USERNAME)
+        if configured_accounts:
+            await self._bootstrap_configured_accounts(configured_accounts)
             self._account_ready = True
             return
 
@@ -261,10 +258,48 @@ class TwscrapeEngine(ScraperEngine):
         """Explain the accepted account bootstrap inputs."""
         return (
             "No twscrape account bootstrap data was found in .env. "
-            "Set X_USERNAME plus either X_COOKIES, or X_AUTH_TOKEN and X_CT0, "
-            "or set X_USERNAME, X_PASSWORD, X_EMAIL, and X_EMAIL_PASSWORD, "
+            "Set X_ACCOUNTS_JSON with one or more accounts, or set X_USERNAME plus "
+            "either X_COOKIES, or X_AUTH_TOKEN and X_CT0, or set X_USERNAME, "
+            "X_PASSWORD, X_EMAIL, and X_EMAIL_PASSWORD, "
             "then rerun `python -m app.scraper.twscrape_setup`."
         )
+
+    async def _bootstrap_configured_accounts(
+        self,
+        accounts: tuple[TwscrapeAccountSettings, ...],
+    ) -> None:
+        login_usernames: list[str] = []
+
+        for account in accounts:
+            cookies = account.cookies_value()
+            if cookies:
+                await self.api.pool.add_account_cookies(account.username, cookies)
+                logger.info("Configured twscrape account from cookies username=%s", account.username)
+                continue
+
+            if account.has_password_auth():
+                await self.api.pool.add_account(
+                    account.username,
+                    account.password or "",
+                    account.email or "",
+                    account.email_password or "",
+                    user_agent=account.user_agent,
+                    proxy=account.proxy,
+                    cookies=account.cookies,
+                    mfa_code=account.mfa_code,
+                )
+                login_usernames.append(account.username)
+                logger.info("Configured twscrape account from credentials username=%s", account.username)
+                continue
+
+            raise RuntimeError(
+                "Configured X account is missing usable auth fields "
+                f"username={account.username!r}."
+            )
+
+        if login_usernames:
+            await self.api.pool.login_all(usernames=login_usernames)
+            logger.info("Logged into twscrape credential accounts usernames=%s", login_usernames)
 
     def _window_bounds(self) -> tuple[datetime, datetime]:
         window_end = self.now_provider()
@@ -296,6 +331,7 @@ class TwscrapeEngine(ScraperEngine):
         *,
         keyword: str,
         query: str,
+        fetch_limit: int,
         window_start: datetime,
         window_end: datetime,
     ) -> None:
@@ -306,9 +342,25 @@ class TwscrapeEngine(ScraperEngine):
                 "search_window_start_utc": window_start.isoformat(),
                 "search_window_end_utc": window_end.isoformat(),
                 "lookback_hours": self.lookback_hours,
-                "search_limit_requested": self.search_fetch_multiplier,
+                "search_limit_requested": fetch_limit,
             }
         )
+
+    async def _account_snapshot(self) -> list[dict[str, object]]:
+        accounts = await self.api.pool.get_all()
+        return [
+            {
+                "username": account.username,
+                "active": getattr(account, "active", None),
+                "error_msg": getattr(account, "error_msg", None),
+                "last_used": self._serialize_datetime(getattr(account, "last_used", None)),
+                "locks": {
+                    queue_name: self._serialize_datetime(lock_until)
+                    for queue_name, lock_until in getattr(account, "locks", {}).items()
+                },
+            }
+            for account in accounts
+        ]
 
     def _tweet_snapshot(self, tweet) -> dict[str, object]:
         return {
@@ -319,3 +371,6 @@ class TwscrapeEngine(ScraperEngine):
             "rawContent": getattr(tweet, "rawContent", None),
             "username": getattr(getattr(tweet, "user", None), "username", None),
         }
+
+    def _serialize_datetime(self, value: object) -> str | None:
+        return value.isoformat() if isinstance(value, datetime) else None

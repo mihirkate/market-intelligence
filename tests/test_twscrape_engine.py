@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
+import pytest
+
+import app.scraper.engines.twscrape_engine as twscrape_engine_module
+from app.core.config import TwscrapeAccountSettings
 from app.scraper.engines.twscrape_engine import TwscrapeEngine
 from app.storage import DebugArtifactStore
 
@@ -68,8 +73,50 @@ class FakeAccount:
 
 
 class FakePool:
+    def __init__(self) -> None:
+        self.cookie_accounts: list[tuple[str, str]] = []
+        self.credential_accounts: list[dict[str, object]] = []
+        self.deleted_usernames: list[str] = []
+        self.logged_in_usernames: list[str] = []
+
     async def get_all(self) -> list[FakeAccount]:
         return [FakeAccount("demo_account")]
+
+    async def delete_accounts(self, usernames):
+        if isinstance(usernames, str):
+            self.deleted_usernames.append(usernames)
+        else:
+            self.deleted_usernames.extend(usernames)
+
+    async def add_account_cookies(self, username: str, cookies: str) -> None:
+        self.cookie_accounts.append((username, cookies))
+
+    async def add_account(
+        self,
+        username: str,
+        password: str,
+        email: str,
+        email_password: str,
+        user_agent: str | None = None,
+        proxy: str | None = None,
+        cookies: str | None = None,
+        mfa_code: str | None = None,
+    ) -> None:
+        self.credential_accounts.append(
+            {
+                "username": username,
+                "password": password,
+                "email": email,
+                "email_password": email_password,
+                "user_agent": user_agent,
+                "proxy": proxy,
+                "cookies": cookies,
+                "mfa_code": mfa_code,
+            }
+        )
+
+    async def login_all(self, usernames: list[str] | None = None) -> None:
+        self.logged_in_usernames.extend(usernames or [])
 
 
 class FakeAPI:
@@ -132,10 +179,12 @@ def test_twscrape_engine_filters_to_last_24_hours_and_decorates_metadata(tmp_pat
     assert len(records) == 1
     assert api.queries
     assert "since:2026-08-03" in api.queries[0][0]
+    assert api.queries[0][1] == 15
     assert records[0].timestamp_utc == (now - timedelta(hours=2)).isoformat()
     assert records[0].raw_metadata["search_window_start_utc"] == "2026-08-03T15:00:00+00:00"
     assert records[0].raw_metadata["search_window_end_utc"] == "2026-08-04T15:00:00+00:00"
     assert records[0].raw_metadata["matched_keywords"] == ["#nifty50"]
+    assert records[0].raw_metadata["search_limit_requested"] == 15
 
 
 def test_twscrape_engine_retries_failed_search_and_writes_artifact(tmp_path) -> None:
@@ -163,3 +212,49 @@ def test_twscrape_engine_retries_failed_search_and_writes_artifact(tmp_path) -> 
     assert len(api.queries) == 2
     assert artifacts
     assert any("keyword_search_failure" in path.name for path in artifacts)
+
+
+def test_twscrape_engine_bootstraps_multiple_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    api = FakeAPI([])
+    engine = TwscrapeEngine(api=api)
+    monkeypatch.setattr(
+        twscrape_engine_module,
+        "settings",
+        SimpleNamespace(
+            X_ACCOUNTS=(
+                TwscrapeAccountSettings(
+                    username="cookie_user",
+                    auth_token="token-1",
+                    ct0="ct0-1",
+                ),
+                TwscrapeAccountSettings(
+                    username="credential_user",
+                    password="secret",
+                    email="user@example.com",
+                    email_password="mail-secret",
+                    user_agent="agent-1",
+                    proxy="http://proxy.local:8080",
+                    mfa_code="123456",
+                ),
+            )
+        ),
+        raising=False,
+    )
+
+    engine.bootstrap_account(force=True)
+
+    assert api.pool.deleted_usernames == []
+    assert api.pool.cookie_accounts == [("cookie_user", "auth_token=token-1; ct0=ct0-1")]
+    assert api.pool.credential_accounts == [
+        {
+            "username": "credential_user",
+            "password": "secret",
+            "email": "user@example.com",
+            "email_password": "mail-secret",
+            "user_agent": "agent-1",
+            "proxy": "http://proxy.local:8080",
+            "cookies": None,
+            "mfa_code": "123456",
+        }
+    ]
+    assert api.pool.logged_in_usernames == ["credential_user"]

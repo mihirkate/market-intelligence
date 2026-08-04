@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,104 @@ def _read_csv(name: str) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class TwscrapeAccountSettings:
+    """One X account configuration that can seed the local twscrape pool."""
+
+    username: str
+    password: str | None = None
+    email: str | None = None
+    email_password: str | None = None
+    cookies: str | None = None
+    auth_token: str | None = None
+    ct0: str | None = None
+    mfa_code: str | None = None
+    user_agent: str | None = None
+    proxy: str | None = None
+
+    def cookies_value(self) -> str | None:
+        """Return a cookie string accepted by twscrape, if configured."""
+        if self.cookies:
+            return self.cookies
+        if self.auth_token and self.ct0:
+            return f"auth_token={self.auth_token}; ct0={self.ct0}"
+        return None
+
+    def has_cookie_auth(self) -> bool:
+        return self.cookies_value() is not None
+
+    def has_password_auth(self) -> bool:
+        return all([self.password, self.email, self.email_password])
+
+
+def _parse_twscrape_accounts(raw: str | None) -> tuple[TwscrapeAccountSettings, ...]:
+    """Parse JSON-encoded X account config from `.env`."""
+    if raw is None or raw.strip() == "":
+        return ()
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("X_ACCOUNTS_JSON must be valid JSON.") from error
+
+    if not isinstance(payload, list):
+        raise ValueError("X_ACCOUNTS_JSON must decode to a JSON array.")
+
+    accounts: list[TwscrapeAccountSettings] = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"X_ACCOUNTS_JSON[{index}] must be a JSON object.")
+
+        username = str(item.get("username", "")).strip()
+        if not username:
+            raise ValueError(f"X_ACCOUNTS_JSON[{index}] is missing 'username'.")
+
+        account = TwscrapeAccountSettings(
+            username=username,
+            password=_clean_optional_value(item.get("password")),
+            email=_clean_optional_value(item.get("email")),
+            email_password=_clean_optional_value(item.get("email_password")),
+            cookies=_clean_optional_value(item.get("cookies")),
+            auth_token=_clean_optional_value(item.get("auth_token")),
+            ct0=_clean_optional_value(item.get("ct0")),
+            mfa_code=_clean_optional_value(item.get("mfa_code")),
+            user_agent=_clean_optional_value(item.get("user_agent")),
+            proxy=_clean_optional_value(item.get("proxy")),
+        )
+        if not (account.has_cookie_auth() or account.has_password_auth()):
+            raise ValueError(
+                "Each X account must provide either cookies/auth_token+ct0 or "
+                "password+email+email_password."
+            )
+        accounts.append(account)
+
+    return tuple(accounts)
+
+
+def _clean_optional_value(value: object) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _single_twscrape_account_from_env() -> tuple[TwscrapeAccountSettings, ...]:
+    username = _read_optional("X_USERNAME")
+    if not username:
+        return ()
+
+    account = TwscrapeAccountSettings(
+        username=username,
+        password=_read_optional("X_PASSWORD"),
+        email=_read_optional("X_EMAIL"),
+        email_password=_read_optional("X_EMAIL_PASSWORD"),
+        cookies=_read_optional("X_COOKIES"),
+        auth_token=_read_optional("X_AUTH_TOKEN"),
+        ct0=_read_optional("X_CT0"),
+    )
+    return (account,) if (account.has_cookie_auth() or account.has_password_auth()) else ()
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """Immutable runtime settings loaded from environment."""
 
@@ -100,6 +199,7 @@ class Settings:
     FEATURE_TOP_TERMS: int
     PARQUET_CHUNK_SIZE: int
     DASHBOARD_SAMPLE_SIZE: int
+    X_ACCOUNTS: tuple[TwscrapeAccountSettings, ...]
     X_USERNAME: str | None
     X_PASSWORD: str | None
     X_EMAIL: str | None
@@ -162,6 +262,7 @@ settings = Settings(
     FEATURE_TOP_TERMS=_read_default_int("FEATURE_TOP_TERMS", 8),
     PARQUET_CHUNK_SIZE=_read_default_int("PARQUET_CHUNK_SIZE", 500),
     DASHBOARD_SAMPLE_SIZE=_read_default_int("DASHBOARD_SAMPLE_SIZE", 200),
+    X_ACCOUNTS=_parse_twscrape_accounts(_read_optional("X_ACCOUNTS_JSON")) or _single_twscrape_account_from_env(),
     X_USERNAME=_read_optional("X_USERNAME"),
     X_PASSWORD=_read_optional("X_PASSWORD"),
     X_EMAIL=_read_optional("X_EMAIL"),

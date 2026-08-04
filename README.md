@@ -38,6 +38,7 @@ docker compose up --build
 ```bash
 source .venv/bin/activate
 python -m app.scraper.twscrape_setup
+python -m app.scraper.account_status
 python -m app.scraper.manager
 ```
 
@@ -66,6 +67,7 @@ artifacts are written to `data/raw/debug/`.
 
 Set `SCRAPER_ENGINE=twscrape` and provide either:
 
+- `X_ACCOUNTS_JSON` with one or more accounts, or
 - `X_USERNAME` plus `X_COOKIES`, or
 - `X_USERNAME`, `X_AUTH_TOKEN`, and `X_CT0`, or
 - `X_USERNAME`, `X_PASSWORD`, `X_EMAIL`, and `X_EMAIL_PASSWORD`
@@ -101,15 +103,31 @@ X_AUTH_TOKEN=your_auth_token
 X_CT0=your_ct0_token
 ```
 
+For longer runs, prefer multiple accounts so twscrape can rotate when
+`SearchTimeline` locks one account. `X_ACCOUNTS_JSON` accepts a JSON array:
+
+```dotenv
+X_ACCOUNTS_JSON=[{"username":"acct_one","auth_token":"token-1","ct0":"ct0-1"},{"username":"acct_two","auth_token":"token-2","ct0":"ct0-2"}]
+```
+
+After bootstrap, inspect the pool and current queue locks:
+
+```bash
+source .venv/bin/activate
+python -m app.scraper.account_status
+```
+
 For Atlas or another remote deployment, set `MONGODB_URI` to your external
 connection string outside source control and keep `MONGODB_DATABASE` as
 `market-intelligence`.
 
 If `python -m app.scraper.twscrape_setup` fails, the current `.env` is usually
-missing all `X_*` auth fields. The setup command only seeds the local
-`data/twscrape/accounts.db` from values already present in `.env`.
+missing all account auth fields or contains invalid `X_ACCOUNTS_JSON`. The
+setup command only seeds the local `data/twscrape/accounts.db` from values
+already present in `.env`.
 
 If `python -m app.scraper.manager` fails with `No account available for queue SearchTimeline`,
 the configured account is rate-limited. The run now fails fast after
 `TWSCRAPE_WAIT_TIMEOUT` seconds and writes a debug artifact instead of hanging
-indefinitely.
+indefinitely. Run `python -m app.scraper.account_status` to see which account
+is locked and for how long.
