@@ -298,3 +298,28 @@ def test_twscrape_engine_bootstraps_multiple_accounts(monkeypatch: pytest.Monkey
         }
     ]
     assert api.pool.logged_in_usernames == ["credential_user"]
+
+
+def test_twscrape_engine_limits_keyword_concurrency_to_active_accounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = FakeAPI([])
+    engine = TwscrapeEngine(
+        api=api,
+        lookback_hours=24,
+        search_fetch_multiplier=1,
+        retry_attempts=1,
+        retry_base_seconds=0,
+        retry_max_seconds=0,
+    )
+    monkeypatch.setattr(
+        twscrape_engine_module,
+        "settings",
+        SimpleNamespace(KEYWORD_CONCURRENCY=4),
+        raising=False,
+    )
+
+    assert engine._keyword_concurrency_limit(0) == 1
+    assert engine._keyword_concurrency_limit(1) == 1
+    assert engine._keyword_concurrency_limit(2) == 2
+    assert engine._keyword_concurrency_limit(10) == 4
