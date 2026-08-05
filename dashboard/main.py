@@ -205,6 +205,15 @@ if tweet_frame.empty:
     st.info("No tweets are stored in the warehouse yet.")
 else:
     tweet_frame["timestamp_utc"] = pd.to_datetime(tweet_frame["timestamp_utc"], utc=True, errors="coerce")
+    tweet_frame["timestamp_ist"] = (
+        tweet_frame["timestamp_utc"]
+        .dt.tz_convert("Asia/Kolkata")
+        .dt.strftime("%Y-%m-%d %I:%M:%S %p IST")
+    )
+    tweet_frame["timestamp_ist"] = tweet_frame["timestamp_ist"].where(
+        tweet_frame["timestamp_utc"].notna(),
+        "",
+    )
     sampled_tweets = downsample_frame(
         tweet_frame.sort_values("timestamp_utc", ascending=False),
         max_points=min(50, settings.DASHBOARD_SAMPLE_SIZE),
@@ -215,6 +224,7 @@ else:
                 "keyword",
                 "username",
                 "timestamp_utc",
+                "timestamp_ist",
                 "normalized_content",
                 "sentiment_score",
                 "engagement_score",
