@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -29,15 +30,53 @@ logger.info("Dashboard Initialized")
 st.set_page_config(page_title=settings.DASHBOARD_TITLE, layout="wide")
 
 
-def enable_auto_refresh(*, seconds: int) -> None:
-    """Reload the browser periodically so new scrape data appears automatically."""
+def enable_auto_refresh(*, api_port: int, initial_tweet_count: int, seconds: int) -> None:
+    """Reload the dashboard only when the stored tweet count increases."""
     interval_ms = max(seconds, 5) * 1000
+    baseline_count = int(initial_tweet_count)
+    dashboard_state_path = "/dashboard-state"
     components.html(
         f"""
         <script>
-        window.setTimeout(function() {{
-            window.parent.location.reload();
-        }}, {interval_ms});
+        const targetWindow = window.parent;
+        const pollIntervalMs = {json.dumps(interval_ms)};
+        const baselineCount = {json.dumps(baseline_count)};
+        const apiPort = {json.dumps(api_port)};
+        const dashboardStatePath = {json.dumps(dashboard_state_path)};
+        const protocol = targetWindow.location.protocol || window.location.protocol;
+        const hostname = targetWindow.location.hostname || window.location.hostname;
+        const apiUrl = `${{protocol}}//${{hostname}}:${{apiPort}}${{dashboardStatePath}}`;
+
+        if (targetWindow.__marketIntelligenceRefreshWatcher) {{
+            window.clearInterval(targetWindow.__marketIntelligenceRefreshWatcher);
+        }}
+
+        async function refreshWhenTweetCountIncreases() {{
+            try {{
+                const response = await fetch(apiUrl, {{
+                    method: "GET",
+                    headers: {{ "Accept": "application/json" }},
+                    cache: "no-store",
+                    mode: "cors",
+                }});
+                if (!response.ok) {{
+                    return;
+                }}
+
+                const payload = await response.json();
+                const currentCount = Number(payload.total_tweets ?? baselineCount);
+                if (Number.isFinite(currentCount) && currentCount > baselineCount) {{
+                    targetWindow.location.reload();
+                }}
+            }} catch (error) {{
+                console.debug("Dashboard refresh poll failed", error);
+            }}
+        }}
+
+        targetWindow.__marketIntelligenceRefreshWatcher = window.setInterval(
+            refreshWhenTweetCountIncreases,
+            pollIntervalMs
+        );
         </script>
         """,
         height=0,
@@ -47,11 +86,6 @@ def enable_auto_refresh(*, seconds: int) -> None:
 st.title(settings.DASHBOARD_TITLE)
 st.subheader(settings.DASHBOARD_STATUS_LABEL)
 st.success(settings.DASHBOARD_STATUS)
-dashboard_auto_refresh_enabled = getattr(settings, "DASHBOARD_AUTO_REFRESH_ENABLED", True)
-dashboard_auto_refresh_seconds = getattr(settings, "DASHBOARD_AUTO_REFRESH_SECONDS", 30)
-if dashboard_auto_refresh_enabled:
-    enable_auto_refresh(seconds=dashboard_auto_refresh_seconds)
-    st.caption(f"Auto refresh enabled every {dashboard_auto_refresh_seconds} seconds.")
 
 try:
     repository = TweetRepository()
@@ -72,8 +106,22 @@ except Exception as error:  # noqa: BLE001
     st.error(f"Dashboard data source is unavailable: {error}")
     st.stop()
 
+dashboard_auto_refresh_enabled = getattr(settings, "DASHBOARD_AUTO_REFRESH_ENABLED", True)
+dashboard_auto_refresh_seconds = getattr(settings, "DASHBOARD_AUTO_REFRESH_SECONDS", 30)
+stored_tweet_count = int(overview.get("total_tweets") or 0)
+if dashboard_auto_refresh_enabled:
+    enable_auto_refresh(
+        api_port=settings.API_PORT,
+        initial_tweet_count=stored_tweet_count,
+        seconds=dashboard_auto_refresh_seconds,
+    )
+    st.caption(
+        "Auto refresh watches the Stored Tweets count and reloads when new tweets arrive "
+        f"(checked every {max(dashboard_auto_refresh_seconds, 5)} seconds)."
+    )
+
 metrics = st.columns(4)
-metrics[0].metric("Stored Tweets", int(overview["total_tweets"] or 0))
+metrics[0].metric("Stored Tweets", stored_tweet_count)
 metrics[1].metric("Unique Users", int(overview["unique_users"] or 0))
 metrics[2].metric("Tracked Keywords", int(overview["tracked_keywords"] or 0))
 latest_run = overview.get("latest_run") or {}

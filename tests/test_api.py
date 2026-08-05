@@ -100,6 +100,30 @@ def test_stats_endpoint_returns_overview_and_collection_status(monkeypatch) -> N
     assert payload["collection"]["assignment_data_collection_ready"] is False
 
 
+def test_dashboard_state_endpoint_returns_lightweight_refresh_payload(monkeypatch) -> None:
+    repository = FakeRepository()
+    reporter = FakeReporter(repository=repository)
+    analysis_reporter = FakeAnalysisReporter()
+    monkeypatch.setattr(api_main, "TweetRepository", lambda: repository)
+    monkeypatch.setattr(api_main, "CollectionStatusReporter", lambda repository=None: reporter)
+    monkeypatch.setattr(
+        api_main,
+        "AnalysisReporter",
+        lambda repository=None, collection_status_reporter=None: analysis_reporter,
+    )
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/dashboard-state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_tweets"] == 42
+    assert payload["latest_seen_at"] == "2026-08-04T12:00:00+00:00"
+    assert payload["latest_run_id"] == "run-1"
+    assert payload["latest_run_status"] == "completed"
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_analysis_and_performance_endpoints_return_reports(monkeypatch, tmp_path: Path) -> None:
     repository = FakeRepository()
     reporter = FakeReporter(repository=repository)

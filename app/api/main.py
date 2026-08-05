@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 import json
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
@@ -52,6 +54,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")
@@ -82,6 +90,21 @@ def read_stats(request: Request) -> dict[str, object]:
         "overview": repository.load_dashboard_overview(),
         "collection": reporter.build_status(),
     }
+
+
+@app.get("/dashboard-state")
+def read_dashboard_state(request: Request) -> JSONResponse:
+    """Return a lightweight dashboard refresh payload."""
+    repository = _get_repository(request)
+    overview = repository.load_dashboard_overview()
+    latest_run = overview.get("latest_run") or {}
+    payload = {
+        "total_tweets": int(overview.get("total_tweets") or 0),
+        "latest_seen_at": overview.get("latest_seen_at"),
+        "latest_run_id": latest_run.get("run_id"),
+        "latest_run_status": latest_run.get("status"),
+    }
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/collection-status")
