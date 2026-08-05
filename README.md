@@ -29,6 +29,9 @@ source .venv/bin/activate
 streamlit run dashboard/main.py
 ```
 
+The dashboard auto-refreshes by default every `30` seconds so live collection
+counts, tables, and charts update without manual browser reloads.
+
 ## Docker
 
 ```bash
@@ -41,6 +44,24 @@ as the checked-in template.
 
 For Ubuntu server deployment with `systemd` and `cron`, see
 [deploy/README.md](/home/mihir/market-intelligence/deploy/README.md).
+
+The persistent deployment model is:
+
+- `systemd` runs the FastAPI API
+- `systemd` runs the Streamlit dashboard
+- `cron` runs only the short-lived scraper job
+
+That means:
+
+- `uvicorn app.api.main:app --host 0.0.0.0 --port 8000` should be owned by `systemd`
+- `streamlit run dashboard/main.py --server.address 0.0.0.0 --server.port 8501` should be owned by `systemd`
+- only the collector should run from `cron`
+
+The cron-managed background jobs now include:
+
+- the bounded scraper run
+- a watchdog that checks the API/dashboard and attempts recovery
+- an hourly health email job
 
 ## Scraper Engine
 
@@ -142,6 +163,17 @@ DEBUG_ARTIFACTS_PATH=data/raw/debug
 X_USERNAME=your_x_handle
 X_AUTH_TOKEN=your_auth_token
 X_CT0=your_ct0_token
+```
+
+For a single-account server deployment, start with:
+
+```dotenv
+KEYWORD_CONCURRENCY=1
+CRON_SCHEDULE=*/5 * * * *
+MAX_TWEETS_PER_RUN=60
+DISCOVERY_LIMIT_PER_KEYWORD=25
+RATE_LIMIT_COOLDOWN_MIN_SECONDS=900
+RATE_LIMIT_COOLDOWN_MAX_SECONDS=1800
 ```
 
 For longer runs, prefer multiple accounts so twscrape can rotate when
@@ -252,6 +284,7 @@ to see:
 - `.env` is now ignored and should not be committed with live secrets
 - use [.env.example](/home/mihir/market-intelligence/.env.example) as the template for new environments
 - `.dockerignore` excludes `.env`, local data, logs, and virtualenv files from the image build context
+- `bash scripts/prepare_submission.sh` removes generated runtime artifacts before GitHub submission
 - `docker compose up --build` now runs with restart policies and an API healthcheck
 - the API and dashboard are configured for a remote MongoDB deployment rather than a local-only Mongo instance
 - for MongoDB Atlas, the deployment host must be allowed in Atlas network access rules and able to complete TLS handshakes to the cluster

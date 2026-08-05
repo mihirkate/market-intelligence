@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.scheduler.cron import CRON_END, CRON_START, CronJobSpec, cron_installed, merge_managed_block
+from app.scheduler.cron import (
+    CRON_END,
+    CRON_START,
+    CronJobSpec,
+    cron_installed,
+    merge_managed_block,
+    render_managed_block,
+)
 from app.scheduler.job import run_scheduled_scrape
 from app.scraper.models import ScrapeSummary
 
@@ -34,17 +41,35 @@ class FakeManager:
 
 
 def test_cron_spec_renders_managed_block_with_absolute_command() -> None:
-    spec = CronJobSpec(
-        schedule="*/10 * * * *",
-        project_dir=Path("/srv/market-intelligence"),
-        python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
-        log_path=Path("/srv/market-intelligence/logs/cron.log"),
+    specs = (
+        CronJobSpec(
+            schedule="*/10 * * * *",
+            project_dir=Path("/srv/market-intelligence"),
+            python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
+            log_path=Path("/srv/market-intelligence/logs/cron.log"),
+        ),
+        CronJobSpec(
+            schedule="*/2 * * * *",
+            project_dir=Path("/srv/market-intelligence"),
+            python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
+            log_path=Path("/srv/market-intelligence/logs/watchdog.log"),
+            module_name="app.monitoring.watchdog_job",
+        ),
+        CronJobSpec(
+            schedule="0 * * * *",
+            project_dir=Path("/srv/market-intelligence"),
+            python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
+            log_path=Path("/srv/market-intelligence/logs/health-report.log"),
+            module_name="app.monitoring.hourly_report_job",
+        ),
     )
 
-    rendered = spec.render()
+    rendered = render_managed_block(specs)
 
     assert rendered.startswith(f"{CRON_START}\n")
     assert "*/10 * * * * cd /srv/market-intelligence && /srv/market-intelligence/.venv/bin/python -m app.scheduler.job >> /srv/market-intelligence/logs/cron.log 2>&1" in rendered
+    assert "*/2 * * * * cd /srv/market-intelligence && /srv/market-intelligence/.venv/bin/python -m app.monitoring.watchdog_job >> /srv/market-intelligence/logs/watchdog.log 2>&1" in rendered
+    assert "0 * * * * cd /srv/market-intelligence && /srv/market-intelligence/.venv/bin/python -m app.monitoring.hourly_report_job >> /srv/market-intelligence/logs/health-report.log 2>&1" in rendered
     assert rendered.endswith(f"{CRON_END}\n")
 
 
@@ -55,14 +80,16 @@ def test_merge_managed_block_replaces_existing_scheduler_block() -> None:
         "* * * * * old command\n"
         f"{CRON_END}\n"
     )
-    spec = CronJobSpec(
-        schedule="*/15 * * * *",
-        project_dir=Path("/srv/market-intelligence"),
-        python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
-        log_path=Path("/srv/market-intelligence/logs/cron.log"),
+    specs = (
+        CronJobSpec(
+            schedule="*/15 * * * *",
+            project_dir=Path("/srv/market-intelligence"),
+            python_executable=Path("/srv/market-intelligence/.venv/bin/python"),
+            log_path=Path("/srv/market-intelligence/logs/cron.log"),
+        ),
     )
 
-    merged = merge_managed_block(existing, spec)
+    merged = merge_managed_block(existing, specs)
 
     assert merged.count(CRON_START) == 1
     assert merged.count(CRON_END) == 1

@@ -8,6 +8,7 @@ from pathlib import Path
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Streamlit executes this file with `dashboard/` on `sys.path`, so add the
 # project root explicitly to make the sibling `app/` package importable.
@@ -27,9 +28,28 @@ logger.info("Dashboard Initialized")
 
 st.set_page_config(page_title=settings.DASHBOARD_TITLE, layout="wide")
 
+
+def enable_auto_refresh(*, seconds: int) -> None:
+    """Reload the browser periodically so new scrape data appears automatically."""
+    interval_ms = max(seconds, 5) * 1000
+    components.html(
+        f"""
+        <script>
+        window.setTimeout(function() {{
+            window.parent.location.reload();
+        }}, {interval_ms});
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
 st.title(settings.DASHBOARD_TITLE)
 st.subheader(settings.DASHBOARD_STATUS_LABEL)
 st.success(settings.DASHBOARD_STATUS)
+if settings.DASHBOARD_AUTO_REFRESH_ENABLED:
+    enable_auto_refresh(seconds=settings.DASHBOARD_AUTO_REFRESH_SECONDS)
+    st.caption(f"Auto refresh enabled every {settings.DASHBOARD_AUTO_REFRESH_SECONDS} seconds.")
 
 try:
     repository = TweetRepository()
