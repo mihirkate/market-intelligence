@@ -9,6 +9,7 @@ __pycache__/
 *.pem
 *.key
 *.crt
+market-intelligence.pem
 
 logs/*
 !logs/.gitkeep

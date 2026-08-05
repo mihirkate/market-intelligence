@@ -1,257 +1,320 @@
 # How To Test
 
-This repo now uses `twscrape` only. The old Playwright/browser scraping path
-has been removed.
+This checklist is written for a recruiter or reviewer.
 
-## 1. Install Dependencies
+The current public demo referenced in this checklist is hosted on AWS EC2.
+
+Use it in this order:
+
+1. quick repository validation
+2. local service validation
+3. live scraper validation
+4. optional monitoring validation
+5. optional Ubuntu server validation
+
+## 1. Quick Repository Validation
+
+This path does not require live X credentials or a running MongoDB instance.
 
 ```bash
-cd /home/mihir/market-intelligence
+cd ~/market-intelligence
+python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-## 2. Configure `.env`
-
-Fill one supported X authentication path in `.env`:
-
-- `X_ACCOUNTS_JSON` with one or more accounts
-- `X_USERNAME` + `X_COOKIES`
-- `X_USERNAME` + `X_AUTH_TOKEN` + `X_CT0`
-- `X_USERNAME` + `X_PASSWORD` + `X_EMAIL` + `X_EMAIL_PASSWORD`
-
-Recommended live-run settings:
-
-- `LOOKBACK_HOURS=24`
-- `SEARCH_FETCH_MULTIPLIER=3`
-- `SEARCH_RETRY_ATTEMPTS=3`
-- `SEARCH_RETRY_BASE_SECONDS=2`
-- `SEARCH_RETRY_MAX_SECONDS=20`
-- `TWSCRAPE_WAIT_TIMEOUT=30`
-- `TWSCRAPE_WAIT_INTERVAL=1`
-- `MAX_TWEETS_PER_RUN=30` to `50`
-- `RUN_STARTUP_JITTER_MIN_SECONDS=0`
-- `RUN_STARTUP_JITTER_MAX_SECONDS=120`
-- `RATE_LIMIT_COOLDOWN_MIN_SECONDS=1800`
-- `RATE_LIMIT_COOLDOWN_MAX_SECONDS=3600`
-- `COLLECTION_TARGET_TWEETS_LAST_24_HOURS=2000`
-- `COLLECTION_PROGRESS_RECENT_RUN_HOURS=6`
-- `COLLECTION_STATUS_REPORT_PATH=reports/data_collection_status.json`
-- `DEBUG_ARTIFACTS_PATH=data/raw/debug`
-- `MONGODB_URI=mongodb+srv://...` for shared or deployed environments
-- `ALERT_EMAIL_TO=work.mihirkate@gmail.com`
-- `SMTP_HOST=smtp.gmail.com`
-- `SMTP_PORT=587`
-- `SMTP_USERNAME=your_gmail_address`
-- `SMTP_PASSWORD=your_gmail_app_password`
-- `WATCHDOG_SCHEDULE=*/2 * * * *`
-- `HEALTH_REPORT_SCHEDULE=0 * * * *`
-
-If all account fields are blank, `python -m app.scraper.twscrape_setup` will fail.
-
-Example multi-account value:
-
-```dotenv
-X_ACCOUNTS_JSON=[{"username":"acct_one","auth_token":"token-1","ct0":"ct0-1"},{"username":"acct_two","auth_token":"token-2","ct0":"ct0-2"}]
-```
-
-## 3. Bootstrap The Local Account DB
-
-```bash
-source .venv/bin/activate
-python -m app.scraper.twscrape_setup
+pytest -q
+python -m compileall app tests run.py dashboard
 ```
 
 Expected result:
 
-- `data/twscrape/accounts.db` is created
-- the command logs that account bootstrap completed
+- tests pass
+- compileall completes without import errors
+- the reviewer can inspect the codebase without configuring external secrets first
 
-Optional inspection:
+## 2. Full Local Validation Prerequisites
+
+To validate the live application end to end, the reviewer needs:
+
+- MongoDB Community or MongoDB Atlas
+- one valid X account/session for `twscrape`
+
+Create the runtime env file:
+
+```bash
+cp .env.example .env
+```
+
+At minimum, configure:
+
+```dotenv
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DATABASE=market-intelligence
+X_USERNAME=your_x_handle
+X_AUTH_TOKEN=your_auth_token
+X_CT0=your_ct0_token
+```
+
+Alternative supported X auth paths:
+
+- `X_USERNAME` + `X_COOKIES`
+- `X_USERNAME` + `X_PASSWORD` + `X_EMAIL` + `X_EMAIL_PASSWORD`
+- `X_ACCOUNTS_JSON=[...]`
+
+## 3. Bootstrap `twscrape`
 
 ```bash
 source .venv/bin/activate
+python -m app.scraper.twscrape_setup
 python -m app.scraper.account_status
 ```
 
 Expected result:
 
-- JSON is printed with each configured account
-- `locks.SearchTimeline` shows the current X search lock, if any
-- `remaining_seconds` tells you how long before that account can search again
+- `data/twscrape/accounts.db` exists
+- `account_status` prints JSON for the configured account(s)
+- if a lock exists, `remaining_seconds` shows the cooldown
 
-## 4. Run The Scraper
+## 4. Validate One Collector Run
 
 ```bash
 source .venv/bin/activate
 python -m app.scraper.manager
-```
-
-Expected result:
-
-- tweets are stored in the MongoDB database `market-intelligence`
-- raw fetched tweets are archived under `data/raw/date=YYYY-MM-DD/`
-- new unique tweets are exported under `data/parquet/tweets/`
-- keyword signals are exported under `data/parquet/signals/`
-- checkpoint state is written to `data/raw/checkpoint.json`
-- search failures are written to `data/raw/debug/`
-- collection progress is written to `reports/data_collection_status.json`
-- `logs/app.log` records the run
-- rerunning the scraper does not stop just because a previous run hit its target
-
-Recommended assignment pattern:
-
-- run `python -m app.scraper.manager`
-- let it collect a small bounded batch
-- let it exit
-- trigger it again with cron every 10 to 15 minutes
-
-Example cron line:
-
-```bash
-source .venv/bin/activate
-python -m app.scheduler.cron render
-python -m app.scheduler.cron install
-python -m app.scheduler.cron status
-```
-
-If the checkpoint contains an active `cooldown_until`, the manager should skip
-the run cleanly instead of failing.
-
-Expected result:
-
-- `render` prints one managed cron block with scraper, watchdog, and hourly-report jobs
-- `install` adds or replaces that block in the current user's crontab
-- `status` prints `installed`
-- cron executes `python -m app.scheduler.job`, not `app.scraper.manager`
-- overlapping cron runs are skipped because `CRON_LOCK_PATH` is lock-protected
-
-To inspect progress manually at any time:
-
-```bash
-source .venv/bin/activate
 python -m app.scraper.collection_status
 ```
 
 Expected result:
 
-- `reports/data_collection_status.json` is updated
-- the report shows total unique tweets in the last 24 hours
-- the report shows the gap remaining to 2,000
-- the report shows whether all required keywords are being covered
-- the report shows recent tweets/hour so you can judge if cron cadence is sufficient
-- the report shows required tweets/hour and estimated hours to target
+- tweets are upserted into MongoDB database `market-intelligence`
+- raw tweet archives appear under `data/raw/date=YYYY-MM-DD/`
+- parquet exports appear under `data/parquet/tweets/` and `data/parquet/signals/`
+- collection report is written to `reports/data_collection_status.json`
+- processing and analysis reports are updated
 
-## 5. Run The Test Suite
-
-```bash
-source .venv/bin/activate
-pytest -q
-python -m compileall app tests run.py dashboard
-```
-
-## 6. Test Monitoring And Alerting
+Inspect:
 
 ```bash
-source .venv/bin/activate
-python -m app.monitoring.watchdog_job
-python -m app.monitoring.hourly_report_job
+cat reports/data_collection_status.json
 ```
 
-Expected result:
+Confirm:
 
-- the watchdog checks both `market-intelligence-api.service` and `market-intelligence-dashboard.service`
-- if a restart count increased or a service is unhealthy, an alert email is attempted
-- the alert email includes service status plus log excerpts
-- the hourly report sends one summary email covering API, dashboard, and collection status
+- `total_unique_tweets_last_24_hours` is present
+- `remaining_tweets_to_target` is present
+- `assignment_data_collection_ready` is present
 
-If you want the host to reboot itself after repeated failed recoveries:
+## 5. Validate API And Dashboard Locally
 
-- set `MONITOR_REBOOT_ON_CRITICAL=true`
-- set `MONITOR_FAILURES_BEFORE_REBOOT=3`
-
-## 7. Generate Analysis And Performance Reports
-
-```bash
-source .venv/bin/activate
-python -m app.reporting.performance
-```
-
-Expected result:
-
-- `reports/performance_benchmark.json` is created
-- it contains multiple scenarios with increasing `record_count`
-- it contains `peak_memory_mb` and `records_per_second_total`
-
-The scraper manager should also keep these updated after successful runs:
-
-- `reports/processing_report.json`
-- `reports/analysis_summary.json`
-
-## 8. Verify API Health
+Terminal 1:
 
 ```bash
 source .venv/bin/activate
 python run.py
 ```
 
-Then in another terminal:
+Terminal 2:
 
 ```bash
+source .venv/bin/activate
+streamlit run dashboard/main.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Check the API:
+
+```bash
+curl http://127.0.0.1:8000/
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/stats
+curl http://127.0.0.1:8000/dashboard-state
+curl http://127.0.0.1:8000/collection-status
 curl http://127.0.0.1:8000/analysis-summary
-curl http://127.0.0.1:8000/performance-benchmark
 ```
 
 Expected result:
 
-- `/health` returns `status=running` plus MongoDB connection details
-- `/stats` returns dashboard overview and live collection progress
-- `/analysis-summary` returns latest signals, top influencers, and hourly volume
-- `/performance-benchmark` returns the saved benchmark report or `status=not-generated`
-- if MongoDB is unreachable, startup should fail fast instead of serving a broken API
+- `/` returns `{"status":"running"}`
+- `/health` returns app and MongoDB health
+- `/stats` returns dashboard overview and collection progress
+- `/dashboard-state` returns a lightweight DB-backed count payload
 
-## 9. Common Failures
+Open the dashboard:
 
-`RuntimeError: No twscrape account bootstrap data was found in .env`
+- `http://127.0.0.1:8501/`
 
-- `.env` is missing account auth values or `X_ACCOUNTS_JSON` is invalid JSON
-- fill one supported auth combination and rerun setup
+Expected dashboard behavior:
 
-`RuntimeError: No tweets returned for keyword: ...`
+- the summary counts render on initial page load
+- the dashboard polls the lightweight count endpoint
+- the page reloads only if the stored tweet count in MongoDB increases
+- if the count does not increase, the page does not reload
 
-- the account was bootstrapped, but the search returned nothing for that keyword
-- try a broader keyword or verify the X account can search normally
+## 6. Validate The Refresh Behavior
 
-`No account available for queue SearchTimeline`
+This specifically tests the dashboard reload logic.
 
-- the X account is rate-limited for search
-- the manager should now store `cooldown_until` in `data/raw/checkpoint.json`
-- the current run should exit cleanly with status `cooldown`
-- the next cron execution should skip until the cooldown expires
-- wait for the X rate limit window to reset or add more accounts
-- run `python -m app.scraper.account_status` to inspect account locks
-- inspect `data/raw/debug/` for the captured failure artifact
-- tune `TWSCRAPE_WAIT_TIMEOUT` if you want faster failure instead of waiting
+1. Open the dashboard in the browser.
+2. Note the current `Stored Tweets` count.
+3. Run another bounded scrape:
 
-MongoDB or account DB issues
+```bash
+source .venv/bin/activate
+python -m app.scraper.manager
+```
 
-- delete `data/twscrape/accounts.db`
-- rerun `python -m app.scraper.twscrape_setup`
-- confirm `MONGODB_URI` points to a reachable local or cloud MongoDB instance
-- for Atlas, confirm the cluster network access rules and credentials are valid
-- if Atlas TLS handshakes fail in one environment, test the same URI from the deployment server directly
-- if `python -m app.scheduler.cron status` says the `crontab` command is not installed, install the OS cron package on the deployment host first
+4. Wait one refresh interval, controlled by:
 
-Email or watchdog issues
+```dotenv
+DASHBOARD_AUTO_REFRESH_SECONDS=30
+```
 
-- if no email arrives, verify `ALERT_EMAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, and `SMTP_PASSWORD`
-- if using Gmail, use an app password rather than the normal account password
-- inspect `logs/watchdog.log` and `logs/health-report.log`
-- note that a completely hard-down EC2 instance cannot self-recover from code running inside that same instance; use AWS auto-recovery for that case
+Expected result:
 
-Warehouse or parquet issues
+- if MongoDB `total_tweets` increases, the page reloads
+- the new `Stored Tweets` value appears after reload
+- if no new tweets were inserted, the page remains unchanged
 
-- drop the `market-intelligence` database only if you want a full reset
-- remove `data/parquet/tweets/` and `data/parquet/signals/` if you want to regenerate analytics exports
+## 7. Validate Monitoring And Email
+
+Optional. Requires SMTP settings in `.env`.
+
+Example:
+
+```dotenv
+ALERT_EMAIL_TO=recipient@example.com
+ALERT_EMAIL_FROM=sender@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=sender@example.com
+SMTP_PASSWORD=your_gmail_app_password
+SMTP_USE_TLS=true
+```
+
+Run:
+
+```bash
+source .venv/bin/activate
+python -m app.monitoring.hourly_report_job
+python -m app.monitoring.watchdog_job
+```
+
+Expected result:
+
+- health email is attempted
+- watchdog checks the API and dashboard
+- email/log output is written under `logs/`
+
+If using Gmail:
+
+- use an app password, not the account password
+
+## 8. Validate Cron Rendering
+
+```bash
+source .venv/bin/activate
+python -m app.scheduler.cron render
+python -m app.scheduler.cron status
+```
+
+Expected result:
+
+- `render` prints the managed cron block
+- `status` prints `installed` or `not-installed`
+
+If you want to install the cron block on the current machine:
+
+```bash
+python -m app.scheduler.cron install
+crontab -l
+```
+
+Expected jobs:
+
+- scraper job
+- watchdog job
+- health-report email job
+
+## 9. Validate Performance Report
+
+```bash
+source .venv/bin/activate
+python -m app.reporting.performance
+cat reports/performance_benchmark.json
+```
+
+Expected result:
+
+- the benchmark file exists
+- multiple record-count scenarios are present
+- timing and memory metrics are present
+
+## 10. Optional Ubuntu Server Validation
+
+Use this only if the reviewer wants to validate persistent deployment on Ubuntu.
+
+Bootstrap:
+
+```bash
+cd ~/market-intelligence
+bash deploy/bootstrap_server.sh
+source .venv/bin/activate
+```
+
+Configure `.env`, then:
+
+```bash
+python -m app.scraper.twscrape_setup
+bash deploy/install_services.sh
+bash deploy/install_cron.sh
+sudo systemctl status market-intelligence-api --no-pager
+sudo systemctl status market-intelligence-dashboard --no-pager
+crontab -l
+curl http://127.0.0.1:8000/health
+curl -I http://127.0.0.1:8501
+```
+
+If testing from another machine, ensure firewall or cloud security rules allow:
+
+- TCP `8000`
+- TCP `8501`
+
+## 11. Common Failures
+
+### `RuntimeError: No twscrape account is configured`
+
+- `.env` is missing valid X auth fields
+- rerun `python -m app.scraper.twscrape_setup` after fixing `.env`
+
+### `No account available for queue "SearchTimeline"`
+
+- the X account is currently rate-limited
+- inspect:
+
+```bash
+python -m app.scraper.account_status
+```
+
+### `pymongo.errors.ServerSelectionTimeoutError`
+
+- MongoDB is unreachable
+- fix `MONGODB_URI`
+- verify Atlas network access if using cloud MongoDB
+
+### Dashboard does not open
+
+- confirm the API is healthy:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+- confirm Streamlit is running on port `8501`
+
+### SMTP authentication fails
+
+- use a Gmail app password
+- verify `SMTP_USERNAME`, `SMTP_PASSWORD`, `ALERT_EMAIL_TO`
+
+### `address already in use`
+
+- another process or `systemd` service is already bound to the port
+- either stop the existing service or do not start a second manual process on the same port
