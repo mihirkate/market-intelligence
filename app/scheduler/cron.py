@@ -1,9 +1,10 @@
-"""Render and manage the scraper cron entry."""
+"""Render and manage the recurring cron jobs."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -11,43 +12,79 @@ import sys
 
 from app.core.config import settings
 
-CRON_MARKER = "market-intelligence-scraper"
+CRON_MARKER = "market-intelligence-jobs"
 CRON_START = f"# BEGIN {CRON_MARKER}"
 CRON_END = f"# END {CRON_MARKER}"
 
 
 @dataclass(frozen=True, slots=True)
 class CronJobSpec:
-    """Cron job definition for the scheduled scraper."""
+    """Cron job definition for one scheduled background task."""
 
     schedule: str
     project_dir: Path
     python_executable: Path
     log_path: Path
     module_name: str = "app.scheduler.job"
+    env_file: Path | None = None
 
     def command(self) -> str:
         """Return the shell command executed by cron."""
+        env_prefix = ""
+        if self.env_file is not None:
+            env_prefix = f"ENV_FILE={shlex.quote(str(self.env_file))} "
         return (
             f"cd {shlex.quote(str(self.project_dir))} && "
-            f"{shlex.quote(str(self.python_executable))} -m {self.module_name} "
+            f"{env_prefix}{shlex.quote(str(self.python_executable))} -m {self.module_name} "
             f">> {shlex.quote(str(self.log_path))} 2>&1"
         )
 
     def render(self) -> str:
-        """Render the managed cron block."""
-        return f"{CRON_START}\n{self.schedule} {self.command()}\n{CRON_END}\n"
+        """Render one cron line."""
+        return f"{self.schedule} {self.command()}"
 
 
-def build_default_spec(*, python_executable: str | None = None) -> CronJobSpec:
-    """Build the default cron job spec from application settings."""
+def build_default_specs(*, python_executable: str | None = None) -> tuple[CronJobSpec, ...]:
+    """Build the default recurring job specs from application settings."""
     python_path = Path(python_executable) if python_executable else Path(sys.executable)
-    return CronJobSpec(
-        schedule=settings.CRON_SCHEDULE,
-        project_dir=settings.BASE_DIR,
-        python_executable=python_path,
-        log_path=settings.CRON_LOG_PATH,
+    env_file_raw = os.getenv("ENV_FILE")
+    env_file = None
+    if env_file_raw:
+        env_file = Path(env_file_raw).expanduser()
+        if not env_file.is_absolute():
+            env_file = (settings.BASE_DIR / env_file).resolve()
+    return (
+        CronJobSpec(
+            schedule=settings.CRON_SCHEDULE,
+            project_dir=settings.BASE_DIR,
+            python_executable=python_path,
+            log_path=settings.CRON_LOG_PATH,
+            module_name="app.scheduler.job",
+            env_file=env_file,
+        ),
+        CronJobSpec(
+            schedule=settings.WATCHDOG_SCHEDULE,
+            project_dir=settings.BASE_DIR,
+            python_executable=python_path,
+            log_path=settings.WATCHDOG_LOG_PATH,
+            module_name="app.monitoring.watchdog_job",
+            env_file=env_file,
+        ),
+        CronJobSpec(
+            schedule=settings.HEALTH_REPORT_SCHEDULE,
+            project_dir=settings.BASE_DIR,
+            python_executable=python_path,
+            log_path=settings.HEALTH_REPORT_LOG_PATH,
+            module_name="app.monitoring.hourly_report_job",
+            env_file=env_file,
+        ),
     )
+
+
+def render_managed_block(specs: tuple[CronJobSpec, ...]) -> str:
+    """Render the full managed cron block."""
+    lines = "\n".join(spec.render() for spec in specs)
+    return f"{CRON_START}\n{lines}\n{CRON_END}\n"
 
 
 def strip_managed_block(crontab_text: str) -> str:
@@ -70,10 +107,10 @@ def strip_managed_block(crontab_text: str) -> str:
     return f"{cleaned}\n" if cleaned else ""
 
 
-def merge_managed_block(crontab_text: str, spec: CronJobSpec) -> str:
+def merge_managed_block(crontab_text: str, specs: tuple[CronJobSpec, ...]) -> str:
     """Add or replace the managed cron block inside the provided crontab text."""
     base = strip_managed_block(crontab_text)
-    return f"{base}{spec.render()}"
+    return f"{base}{render_managed_block(specs)}"
 
 
 def read_crontab() -> str:
@@ -111,9 +148,9 @@ def write_crontab(crontab_text: str) -> None:
         raise RuntimeError("The `crontab` command is not installed on this host.") from error
 
 
-def install_cron(spec: CronJobSpec) -> str:
-    """Install or replace the managed scraper cron block."""
-    updated = merge_managed_block(read_crontab(), spec)
+def install_cron(specs: tuple[CronJobSpec, ...]) -> str:
+    """Install or replace the managed cron block."""
+    updated = merge_managed_block(read_crontab(), specs)
     write_crontab(updated)
     return updated
 
@@ -132,7 +169,7 @@ def cron_installed(crontab_text: str) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
-    parser = argparse.ArgumentParser(description="Manage the scraper cron entry.")
+    parser = argparse.ArgumentParser(description="Manage the recurring cron entries.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("render", help="Print the managed cron block.")
@@ -146,15 +183,15 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for cron management."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    spec = build_default_spec()
+    specs = build_default_specs()
 
     try:
         if args.command == "render":
-            print(spec.render(), end="")
+            print(render_managed_block(specs), end="")
             return 0
 
         if args.command == "install":
-            print(install_cron(spec), end="")
+            print(install_cron(specs), end="")
             return 0
 
         if args.command == "status":

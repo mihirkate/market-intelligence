@@ -10,7 +10,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / ".env")
+DEFAULT_ENV_FILE = BASE_DIR / ".env"
+ENV_FILE = Path(os.getenv("ENV_FILE", str(DEFAULT_ENV_FILE))).expanduser()
+if not ENV_FILE.is_absolute():
+    ENV_FILE = (BASE_DIR / ENV_FILE).resolve()
+load_dotenv(ENV_FILE)
 
 def _read_required(name: str) -> str:
     value = os.getenv(name)
@@ -41,6 +45,11 @@ def _read_default_float(name: str, default: float) -> float:
     return float(_read_default(name, str(default)))
 
 
+def _read_default_bool(name: str, default: bool) -> bool:
+    raw = _read_default(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _read_path(name: str) -> Path:
     value = Path(_read_required(name))
     return value if value.is_absolute() else BASE_DIR / value
@@ -60,6 +69,11 @@ def _read_int_csv(name: str, default: str) -> tuple[int, ...]:
     raw = _read_default(name, default)
     values = [int(item.strip()) for item in raw.split(",") if item.strip()]
     return tuple(values)
+
+
+def _read_default_csv(name: str, default: str) -> tuple[str, ...]:
+    raw = _read_default(name, default)
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +192,8 @@ class Settings:
     DASHBOARD_TITLE: str
     DASHBOARD_STATUS_LABEL: str
     DASHBOARD_STATUS: str
+    DASHBOARD_AUTO_REFRESH_ENABLED: bool
+    DASHBOARD_AUTO_REFRESH_SECONDS: int
     SCRAPER_ENGINE: str
     SCRAPER_KEYWORDS: tuple[str, ...]
     DISCOVERY_LIMIT_PER_KEYWORD: int
@@ -186,6 +202,10 @@ class Settings:
     CRON_SCHEDULE: str
     CRON_LOG_PATH: Path
     CRON_LOCK_PATH: Path
+    WATCHDOG_SCHEDULE: str
+    WATCHDOG_LOG_PATH: Path
+    HEALTH_REPORT_SCHEDULE: str
+    HEALTH_REPORT_LOG_PATH: Path
     RUN_STARTUP_JITTER_MIN_SECONDS: int
     RUN_STARTUP_JITTER_MAX_SECONDS: int
     RATE_LIMIT_COOLDOWN_MIN_SECONDS: int
@@ -221,6 +241,27 @@ class Settings:
     FEATURE_TOP_TERMS: int
     PARQUET_CHUNK_SIZE: int
     DASHBOARD_SAMPLE_SIZE: int
+    ALERT_EMAIL_TO: tuple[str, ...]
+    ALERT_EMAIL_FROM: str | None
+    SMTP_HOST: str | None
+    SMTP_PORT: int
+    SMTP_USERNAME: str | None
+    SMTP_PASSWORD: str | None
+    SMTP_USE_TLS: bool
+    SMTP_TIMEOUT_SECONDS: int
+    MONITOR_USE_SUDO: bool
+    MONITOR_SERVICE_NAMES: tuple[str, ...]
+    MONITOR_STATE_PATH: Path
+    MONITOR_ALERT_COOLDOWN_SECONDS: int
+    MONITOR_LOG_TAIL_LINES: int
+    MONITOR_REQUEST_TIMEOUT_SECONDS: int
+    MONITOR_RESTART_SERVICES: bool
+    MONITOR_REBOOT_ON_CRITICAL: bool
+    MONITOR_FAILURES_BEFORE_REBOOT: int
+    MONITOR_POST_RESTART_WAIT_SECONDS: int
+    MONITOR_SEND_RECOVERY_EMAIL: bool
+    MONITOR_API_HEALTH_URL: str
+    MONITOR_DASHBOARD_URL: str
     X_ACCOUNTS: tuple[TwscrapeAccountSettings, ...]
     X_USERNAME: str | None
     X_PASSWORD: str | None
@@ -237,6 +278,8 @@ class Settings:
         self.LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.CRON_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.CRON_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.WATCHDOG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.HEALTH_REPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.TWSCRAPE_ACCOUNTS_DB.parent.mkdir(parents=True, exist_ok=True)
         self.COLLECTION_STATUS_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -263,6 +306,8 @@ settings = Settings(
     DASHBOARD_TITLE=_read_required("DASHBOARD_TITLE"),
     DASHBOARD_STATUS_LABEL=_read_required("DASHBOARD_STATUS_LABEL"),
     DASHBOARD_STATUS=_read_required("DASHBOARD_STATUS"),
+    DASHBOARD_AUTO_REFRESH_ENABLED=_read_default_bool("DASHBOARD_AUTO_REFRESH_ENABLED", True),
+    DASHBOARD_AUTO_REFRESH_SECONDS=_read_default_int("DASHBOARD_AUTO_REFRESH_SECONDS", 30),
     SCRAPER_ENGINE=_read_default("SCRAPER_ENGINE", "twscrape").lower(),
     SCRAPER_KEYWORDS=_read_csv("SCRAPER_KEYWORDS"),
     DISCOVERY_LIMIT_PER_KEYWORD=_read_int("DISCOVERY_LIMIT_PER_KEYWORD"),
@@ -271,6 +316,10 @@ settings = Settings(
     CRON_SCHEDULE=_read_default("CRON_SCHEDULE", "*/10 * * * *"),
     CRON_LOG_PATH=_read_default_path("CRON_LOG_PATH", "logs/cron.log"),
     CRON_LOCK_PATH=_read_default_path("CRON_LOCK_PATH", "data/raw/cron.lock"),
+    WATCHDOG_SCHEDULE=_read_default("WATCHDOG_SCHEDULE", "*/2 * * * *"),
+    WATCHDOG_LOG_PATH=_read_default_path("WATCHDOG_LOG_PATH", "logs/watchdog.log"),
+    HEALTH_REPORT_SCHEDULE=_read_default("HEALTH_REPORT_SCHEDULE", "0 * * * *"),
+    HEALTH_REPORT_LOG_PATH=_read_default_path("HEALTH_REPORT_LOG_PATH", "logs/health-report.log"),
     RUN_STARTUP_JITTER_MIN_SECONDS=_read_default_int("RUN_STARTUP_JITTER_MIN_SECONDS", 0),
     RUN_STARTUP_JITTER_MAX_SECONDS=_read_default_int("RUN_STARTUP_JITTER_MAX_SECONDS", 120),
     RATE_LIMIT_COOLDOWN_MIN_SECONDS=_read_default_int("RATE_LIMIT_COOLDOWN_MIN_SECONDS", 1800),
@@ -318,6 +367,30 @@ settings = Settings(
     FEATURE_TOP_TERMS=_read_default_int("FEATURE_TOP_TERMS", 8),
     PARQUET_CHUNK_SIZE=_read_default_int("PARQUET_CHUNK_SIZE", 500),
     DASHBOARD_SAMPLE_SIZE=_read_default_int("DASHBOARD_SAMPLE_SIZE", 200),
+    ALERT_EMAIL_TO=_read_default_csv("ALERT_EMAIL_TO", ""),
+    ALERT_EMAIL_FROM=_read_optional("ALERT_EMAIL_FROM"),
+    SMTP_HOST=_read_optional("SMTP_HOST"),
+    SMTP_PORT=_read_default_int("SMTP_PORT", 587),
+    SMTP_USERNAME=_read_optional("SMTP_USERNAME"),
+    SMTP_PASSWORD=_read_optional("SMTP_PASSWORD"),
+    SMTP_USE_TLS=_read_default_bool("SMTP_USE_TLS", True),
+    SMTP_TIMEOUT_SECONDS=_read_default_int("SMTP_TIMEOUT_SECONDS", 30),
+    MONITOR_USE_SUDO=_read_default_bool("MONITOR_USE_SUDO", True),
+    MONITOR_SERVICE_NAMES=_read_default_csv(
+        "MONITOR_SERVICE_NAMES",
+        "market-intelligence-api.service,market-intelligence-dashboard.service",
+    ),
+    MONITOR_STATE_PATH=_read_default_path("MONITOR_STATE_PATH", "data/raw/monitor_state.json"),
+    MONITOR_ALERT_COOLDOWN_SECONDS=_read_default_int("MONITOR_ALERT_COOLDOWN_SECONDS", 900),
+    MONITOR_LOG_TAIL_LINES=_read_default_int("MONITOR_LOG_TAIL_LINES", 80),
+    MONITOR_REQUEST_TIMEOUT_SECONDS=_read_default_int("MONITOR_REQUEST_TIMEOUT_SECONDS", 15),
+    MONITOR_RESTART_SERVICES=_read_default_bool("MONITOR_RESTART_SERVICES", True),
+    MONITOR_REBOOT_ON_CRITICAL=_read_default_bool("MONITOR_REBOOT_ON_CRITICAL", False),
+    MONITOR_FAILURES_BEFORE_REBOOT=_read_default_int("MONITOR_FAILURES_BEFORE_REBOOT", 3),
+    MONITOR_POST_RESTART_WAIT_SECONDS=_read_default_int("MONITOR_POST_RESTART_WAIT_SECONDS", 10),
+    MONITOR_SEND_RECOVERY_EMAIL=_read_default_bool("MONITOR_SEND_RECOVERY_EMAIL", True),
+    MONITOR_API_HEALTH_URL=_read_default("MONITOR_API_HEALTH_URL", "http://127.0.0.1:8000/health"),
+    MONITOR_DASHBOARD_URL=_read_default("MONITOR_DASHBOARD_URL", "http://127.0.0.1:8501/"),
     X_ACCOUNTS=_parse_twscrape_accounts(_read_optional("X_ACCOUNTS_JSON")) or _single_twscrape_account_from_env(),
     X_USERNAME=_read_optional("X_USERNAME"),
     X_PASSWORD=_read_optional("X_PASSWORD"),

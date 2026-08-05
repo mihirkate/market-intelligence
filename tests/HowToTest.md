@@ -39,6 +39,13 @@ Recommended live-run settings:
 - `COLLECTION_STATUS_REPORT_PATH=reports/data_collection_status.json`
 - `DEBUG_ARTIFACTS_PATH=data/raw/debug`
 - `MONGODB_URI=mongodb+srv://...` for shared or deployed environments
+- `ALERT_EMAIL_TO=work.mihirkate@gmail.com`
+- `SMTP_HOST=smtp.gmail.com`
+- `SMTP_PORT=587`
+- `SMTP_USERNAME=your_gmail_address`
+- `SMTP_PASSWORD=your_gmail_app_password`
+- `WATCHDOG_SCHEDULE=*/2 * * * *`
+- `HEALTH_REPORT_SCHEDULE=0 * * * *`
 
 If all account fields are blank, `python -m app.scraper.twscrape_setup` will fail.
 
@@ -113,7 +120,7 @@ the run cleanly instead of failing.
 
 Expected result:
 
-- `render` prints one managed cron block
+- `render` prints one managed cron block with scraper, watchdog, and hourly-report jobs
 - `install` adds or replaces that block in the current user's crontab
 - `status` prints `installed`
 - cron executes `python -m app.scheduler.job`, not `app.scraper.manager`
@@ -143,7 +150,27 @@ pytest -q
 python -m compileall app tests run.py dashboard
 ```
 
-## 6. Generate Analysis And Performance Reports
+## 6. Test Monitoring And Alerting
+
+```bash
+source .venv/bin/activate
+python -m app.monitoring.watchdog_job
+python -m app.monitoring.hourly_report_job
+```
+
+Expected result:
+
+- the watchdog checks both `market-intelligence-api.service` and `market-intelligence-dashboard.service`
+- if a restart count increased or a service is unhealthy, an alert email is attempted
+- the alert email includes service status plus log excerpts
+- the hourly report sends one summary email covering API, dashboard, and collection status
+
+If you want the host to reboot itself after repeated failed recoveries:
+
+- set `MONITOR_REBOOT_ON_CRITICAL=true`
+- set `MONITOR_FAILURES_BEFORE_REBOOT=3`
+
+## 7. Generate Analysis And Performance Reports
 
 ```bash
 source .venv/bin/activate
@@ -161,7 +188,7 @@ The scraper manager should also keep these updated after successful runs:
 - `reports/processing_report.json`
 - `reports/analysis_summary.json`
 
-## 7. Verify API Health
+## 8. Verify API Health
 
 ```bash
 source .venv/bin/activate
@@ -185,7 +212,7 @@ Expected result:
 - `/performance-benchmark` returns the saved benchmark report or `status=not-generated`
 - if MongoDB is unreachable, startup should fail fast instead of serving a broken API
 
-## 8. Common Failures
+## 9. Common Failures
 
 `RuntimeError: No twscrape account bootstrap data was found in .env`
 
@@ -216,6 +243,13 @@ MongoDB or account DB issues
 - for Atlas, confirm the cluster network access rules and credentials are valid
 - if Atlas TLS handshakes fail in one environment, test the same URI from the deployment server directly
 - if `python -m app.scheduler.cron status` says the `crontab` command is not installed, install the OS cron package on the deployment host first
+
+Email or watchdog issues
+
+- if no email arrives, verify `ALERT_EMAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, and `SMTP_PASSWORD`
+- if using Gmail, use an app password rather than the normal account password
+- inspect `logs/watchdog.log` and `logs/health-report.log`
+- note that a completely hard-down EC2 instance cannot self-recover from code running inside that same instance; use AWS auto-recovery for that case
 
 Warehouse or parquet issues
 

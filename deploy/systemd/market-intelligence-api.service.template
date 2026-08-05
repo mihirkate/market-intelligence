@@ -1,13 +1,15 @@
 [Unit]
 Description=Market Intelligence FastAPI API
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
-ExecStart=__PYTHON_BIN__ run.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc '__PYTHON_BIN__ -m uvicorn app.api.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-8000}"'
 Restart=always
 RestartSec=5
 
