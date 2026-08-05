@@ -30,28 +30,308 @@ logger.info("Dashboard Initialized")
 st.set_page_config(page_title=settings.DASHBOARD_TITLE, layout="wide")
 
 
-def enable_auto_refresh(*, api_port: int, initial_tweet_count: int, seconds: int) -> None:
-    """Reload the dashboard only when the stored tweet count increases."""
+def _signal_bias_summary(frame: pd.DataFrame) -> dict[str, object]:
+    """Return the compact signal metrics displayed in the dashboard header."""
+    if frame.empty or "composite_signal" not in frame.columns:
+        return {
+            "buy_keywords": 0,
+            "sell_keywords": 0,
+            "neutral_keywords": 0,
+            "avg_composite_signal": 0.0,
+        }
+
+    composite = frame["composite_signal"].fillna(0.0)
+    return {
+        "buy_keywords": int((composite > 0).sum()),
+        "sell_keywords": int((composite < 0).sum()),
+        "neutral_keywords": int((composite == 0).sum()),
+        "avg_composite_signal": round(float(composite.mean()), 3),
+    }
+
+
+def build_live_summary_payload(
+    *,
+    overview: dict[str, object],
+    collection_status: dict[str, object],
+    latest_signal_frame: pd.DataFrame,
+) -> dict[str, object]:
+    """Build the lightweight summary rendered by the live metrics panel."""
+    latest_run = overview.get("latest_run") or {}
+    return {
+        "overview": {
+            "total_tweets": int(overview.get("total_tweets") or 0),
+            "unique_users": int(overview.get("unique_users") or 0),
+            "tracked_keywords": int(overview.get("tracked_keywords") or 0),
+            "latest_seen_at": overview.get("latest_seen_at"),
+        },
+        "latest_run": {
+            "run_id": latest_run.get("run_id"),
+            "status": latest_run.get("status"),
+            "fetched_count": int(latest_run.get("fetched_count") or 0),
+            "inserted_count": int(latest_run.get("inserted_count") or 0),
+            "updated_count": int(latest_run.get("updated_count") or 0),
+            "duplicate_count": int(latest_run.get("duplicate_count") or 0),
+        },
+        "collection": {
+            "total_unique_tweets_last_24_hours": int(
+                collection_status.get("total_unique_tweets_last_24_hours", 0) or 0
+            ),
+            "remaining_tweets_to_target": int(
+                collection_status.get("remaining_tweets_to_target", 0) or 0
+            ),
+            "projected_24h_tweets_recent_rate": int(
+                collection_status.get("projected_24h_tweets_recent_rate", 0) or 0
+            ),
+            "recent_rate_limit_events": int(
+                collection_status.get("recent_rate_limit_events", 0) or 0
+            ),
+            "recent_tweets_per_hour": float(
+                collection_status.get("recent_tweets_per_hour", 0) or 0
+            ),
+            "required_tweets_per_hour_for_target": float(
+                collection_status.get("required_tweets_per_hour_for_target", 0) or 0
+            ),
+            "target_tweets_last_24_hours": int(
+                collection_status.get("target_tweets_last_24_hours", 0) or 0
+            ),
+            "assignment_data_collection_ready": bool(
+                collection_status.get("assignment_data_collection_ready", False)
+            ),
+            "missing_required_keywords": collection_status.get("missing_required_keywords") or [],
+        },
+        "signal_bias": _signal_bias_summary(latest_signal_frame),
+    }
+
+
+def render_live_summary_panel(
+    *,
+    api_port: int,
+    initial_payload: dict[str, object],
+    seconds: int,
+    enable_polling: bool,
+) -> None:
+    """Render an in-place updating metrics panel without reloading the page."""
     interval_ms = max(seconds, 5) * 1000
-    baseline_count = int(initial_tweet_count)
-    dashboard_state_path = "/dashboard-state"
+    summary_endpoint = "/dashboard-summary"
     components.html(
         f"""
+        <style>
+        :root {{
+            color-scheme: light;
+        }}
+        body {{
+            margin: 0;
+            font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            color: #0f172a;
+            background: transparent;
+        }}
+        .mi-wrap {{
+            padding: 0.25rem 0 0.5rem 0;
+        }}
+        .mi-meta {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.85rem;
+        }}
+        .mi-meta-text {{
+            font-size: 0.88rem;
+            color: #475569;
+        }}
+        .mi-status-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.35rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            background: #e2e8f0;
+            color: #0f172a;
+        }}
+        .mi-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.9rem;
+            margin-bottom: 0.95rem;
+        }}
+        .mi-card {{
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 0.95rem 1rem;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+        }}
+        .mi-label {{
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.5rem;
+        }}
+        .mi-value {{
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1.1;
+            color: #0f172a;
+        }}
+        .mi-detail {{
+            margin-top: 0.25rem;
+            font-size: 0.8rem;
+            color: #64748b;
+        }}
+        .mi-line {{
+            margin: 0.32rem 0;
+            font-size: 0.88rem;
+            color: #334155;
+        }}
+        .mi-alert {{
+            display: none;
+            margin-top: 0.7rem;
+            padding: 0.75rem 0.9rem;
+            border-radius: 12px;
+            border: 1px solid #facc15;
+            background: #fef9c3;
+            color: #854d0e;
+            font-size: 0.88rem;
+            font-weight: 600;
+        }}
+        @media (max-width: 960px) {{
+            .mi-grid {{
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }}
+        }}
+        @media (max-width: 560px) {{
+            .mi-grid {{
+                grid-template-columns: 1fr;
+            }}
+            .mi-meta {{
+                align-items: flex-start;
+                flex-direction: column;
+            }}
+        }}
+        </style>
+        <div class="mi-wrap">
+            <div class="mi-meta">
+                <div id="mi-sync-text" class="mi-meta-text"></div>
+                <div id="mi-ready-pill" class="mi-status-pill"></div>
+            </div>
+            <div class="mi-grid">
+                <div class="mi-card"><div class="mi-label">Stored Tweets</div><div id="metric-total-tweets" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Unique Users</div><div id="metric-unique-users" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Tracked Keywords</div><div id="metric-tracked-keywords" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Last Run Inserts</div><div id="metric-last-run-inserts" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">24h Collected</div><div id="metric-collected-24h" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">To 2000 Target</div><div id="metric-remaining-target" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Projected / 24h</div><div id="metric-projected-24h" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Recent Rate Limits</div><div id="metric-rate-limits" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">BUY Signals</div><div id="metric-buy-signals" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">SELL Signals</div><div id="metric-sell-signals" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Neutral Signals</div><div id="metric-neutral-signals" class="mi-value">0</div></div>
+                <div class="mi-card"><div class="mi-label">Avg Signal</div><div id="metric-avg-signal" class="mi-value">0.000</div></div>
+            </div>
+            <div id="mi-rate-line" class="mi-line"></div>
+            <div id="mi-run-line" class="mi-line"></div>
+            <div id="mi-target-line" class="mi-line"></div>
+            <div id="mi-missing-keywords" class="mi-alert"></div>
+        </div>
         <script>
         const targetWindow = window.parent;
         const pollIntervalMs = {json.dumps(interval_ms)};
-        const baselineCount = {json.dumps(baseline_count)};
         const apiPort = {json.dumps(api_port)};
-        const dashboardStatePath = {json.dumps(dashboard_state_path)};
+        const summaryEndpoint = {json.dumps(summary_endpoint)};
         const protocol = targetWindow.location.protocol || window.location.protocol;
         const hostname = targetWindow.location.hostname || window.location.hostname;
-        const apiUrl = `${{protocol}}//${{hostname}}:${{apiPort}}${{dashboardStatePath}}`;
+        const apiUrl = `${{protocol}}//${{hostname}}:${{apiPort}}${{summaryEndpoint}}`;
+        const pollingEnabled = {json.dumps(enable_polling)};
+        const initialPayload = {json.dumps(initial_payload)};
 
-        if (targetWindow.__marketIntelligenceRefreshWatcher) {{
-            window.clearInterval(targetWindow.__marketIntelligenceRefreshWatcher);
+        function setText(id, value) {{
+            const element = document.getElementById(id);
+            if (element) {{
+                element.textContent = value;
+            }}
         }}
 
-        async function refreshWhenTweetCountIncreases() {{
+        function setAlert(visible, message) {{
+            const element = document.getElementById("mi-missing-keywords");
+            if (!element) {{
+                return;
+            }}
+            element.style.display = visible ? "block" : "none";
+            element.textContent = message || "";
+        }}
+
+        function formatInteger(value) {{
+            const numeric = Number(value ?? 0);
+            return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : "0";
+        }}
+
+        function formatDecimal(value, digits = 1) {{
+            const numeric = Number(value ?? 0);
+            return Number.isFinite(numeric) ? numeric.toFixed(digits) : (0).toFixed(digits);
+        }}
+
+        function updateSummary(payload, syncLabel) {{
+            const overview = payload.overview || {{}};
+            const latestRun = payload.latest_run || {{}};
+            const collection = payload.collection || {{}};
+            const signalBias = payload.signal_bias || {{}};
+
+            setText("metric-total-tweets", formatInteger(overview.total_tweets));
+            setText("metric-unique-users", formatInteger(overview.unique_users));
+            setText("metric-tracked-keywords", formatInteger(overview.tracked_keywords));
+            setText("metric-last-run-inserts", formatInteger(latestRun.inserted_count));
+            setText("metric-collected-24h", formatInteger(collection.total_unique_tweets_last_24_hours));
+            setText("metric-remaining-target", formatInteger(collection.remaining_tweets_to_target));
+            setText("metric-projected-24h", formatInteger(collection.projected_24h_tweets_recent_rate));
+            setText("metric-rate-limits", formatInteger(collection.recent_rate_limit_events));
+            setText("metric-buy-signals", formatInteger(signalBias.buy_keywords));
+            setText("metric-sell-signals", formatInteger(signalBias.sell_keywords));
+            setText("metric-neutral-signals", formatInteger(signalBias.neutral_keywords));
+            setText("metric-avg-signal", formatDecimal(signalBias.avg_composite_signal, 3));
+
+            setText(
+                "mi-rate-line",
+                `Recent rate ${{formatDecimal(collection.recent_tweets_per_hour, 1)}}/hour vs required ` +
+                `${{formatDecimal(collection.required_tweets_per_hour_for_target, 1)}}/hour`
+            );
+            setText(
+                "mi-run-line",
+                `Latest run ${{latestRun.run_id || "n/a"}} status=${{latestRun.status || "unknown"}} ` +
+                `fetched=${{formatInteger(latestRun.fetched_count)}} updated=${{formatInteger(latestRun.updated_count)}} ` +
+                `duplicates=${{formatInteger(latestRun.duplicate_count)}}`
+            );
+            setText(
+                "mi-target-line",
+                `Collection target ${{formatInteger(collection.total_unique_tweets_last_24_hours)}}/` +
+                `${{formatInteger(collection.target_tweets_last_24_hours)}} ready=${{collection.assignment_data_collection_ready ? "yes" : "no"}}`
+            );
+
+            const readyPill = document.getElementById("mi-ready-pill");
+            if (readyPill) {{
+                const ready = Boolean(collection.assignment_data_collection_ready);
+                readyPill.textContent = ready ? "Collection Ready" : "Collection In Progress";
+                readyPill.style.background = ready ? "#dcfce7" : "#fee2e2";
+                readyPill.style.color = ready ? "#166534" : "#991b1b";
+            }}
+
+            const missingKeywords = Array.isArray(collection.missing_required_keywords)
+                ? collection.missing_required_keywords.filter(Boolean)
+                : [];
+            if (missingKeywords.length > 0) {{
+                setAlert(true, `Missing required keyword coverage: ${{missingKeywords.join(", ")}}`);
+            }} else {{
+                setAlert(false, "");
+            }}
+
+            setText("mi-sync-text", syncLabel);
+        }}
+
+        async function refreshSummary() {{
             try {{
                 const response = await fetch(apiUrl, {{
                     method: "GET",
@@ -64,22 +344,32 @@ def enable_auto_refresh(*, api_port: int, initial_tweet_count: int, seconds: int
                 }}
 
                 const payload = await response.json();
-                const currentCount = Number(payload.total_tweets ?? baselineCount);
-                if (Number.isFinite(currentCount) && currentCount > baselineCount) {{
-                    targetWindow.location.reload();
-                }}
+                updateSummary(payload, `Live metrics synced at ${{new Date().toLocaleTimeString()}}`);
             }} catch (error) {{
-                console.debug("Dashboard refresh poll failed", error);
+                console.debug("Dashboard summary poll failed", error);
+                setText("mi-sync-text", "Live metrics sync unavailable. Showing the last loaded snapshot.");
             }}
         }}
 
-        targetWindow.__marketIntelligenceRefreshWatcher = window.setInterval(
-            refreshWhenTweetCountIncreases,
-            pollIntervalMs
+        updateSummary(
+            initialPayload,
+            pollingEnabled
+                ? `Live metrics watch for updates every ${{Math.round(pollIntervalMs / 1000)}}s`
+                : "Live metrics auto-sync is disabled."
         );
+
+        if (targetWindow.__marketIntelligenceSummaryWatcher) {{
+            window.clearInterval(targetWindow.__marketIntelligenceSummaryWatcher);
+        }}
+        if (pollingEnabled) {{
+            targetWindow.__marketIntelligenceSummaryWatcher = window.setInterval(
+                refreshSummary,
+                pollIntervalMs
+            );
+        }}
         </script>
         """,
-        height=0,
+        height=520,
         width=0,
     )
 
@@ -108,80 +398,17 @@ except Exception as error:  # noqa: BLE001
 
 dashboard_auto_refresh_enabled = getattr(settings, "DASHBOARD_AUTO_REFRESH_ENABLED", True)
 dashboard_auto_refresh_seconds = getattr(settings, "DASHBOARD_AUTO_REFRESH_SECONDS", 30)
-stored_tweet_count = int(overview.get("total_tweets") or 0)
-if dashboard_auto_refresh_enabled:
-    enable_auto_refresh(
-        api_port=settings.API_PORT,
-        initial_tweet_count=stored_tweet_count,
-        seconds=dashboard_auto_refresh_seconds,
-    )
-    st.caption(
-        "Auto refresh watches the Stored Tweets count and reloads when new tweets arrive "
-        f"(checked every {max(dashboard_auto_refresh_seconds, 5)} seconds)."
-    )
-
-metrics = st.columns(4)
-metrics[0].metric("Stored Tweets", stored_tweet_count)
-metrics[1].metric("Unique Users", int(overview["unique_users"] or 0))
-metrics[2].metric("Tracked Keywords", int(overview["tracked_keywords"] or 0))
-latest_run = overview.get("latest_run") or {}
-metrics[3].metric("Last Run Inserts", int(latest_run.get("inserted_count", 0) or 0))
-
-collection_metrics = st.columns(4)
-collection_metrics[0].metric(
-    "24h Collected",
-    int(collection_status.get("total_unique_tweets_last_24_hours", 0) or 0),
+live_summary_payload = build_live_summary_payload(
+    overview=overview,
+    collection_status=collection_status,
+    latest_signal_frame=latest_signal_frame,
 )
-collection_metrics[1].metric(
-    "To 2000 Target",
-    int(collection_status.get("remaining_tweets_to_target", 0) or 0),
+render_live_summary_panel(
+    api_port=settings.API_PORT,
+    initial_payload=live_summary_payload,
+    seconds=dashboard_auto_refresh_seconds,
+    enable_polling=dashboard_auto_refresh_enabled,
 )
-collection_metrics[2].metric(
-    "Projected / 24h",
-    int(collection_status.get("projected_24h_tweets_recent_rate", 0) or 0),
-)
-collection_metrics[3].metric(
-    "Recent Rate Limits",
-    int(collection_status.get("recent_rate_limit_events", 0) or 0),
-)
-st.caption(
-    "Recent rate "
-    f"{collection_status.get('recent_tweets_per_hour', 0)}/hour "
-    f"vs required {collection_status.get('required_tweets_per_hour_for_target', 0)}/hour"
-)
-
-if latest_run:
-    st.caption(
-        "Latest run "
-        f"{latest_run.get('run_id')} status={latest_run.get('status')} "
-        f"fetched={latest_run.get('fetched_count')} "
-        f"updated={latest_run.get('updated_count')} "
-        f"duplicates={latest_run.get('duplicate_count')}"
-    )
-
-st.caption(
-    "Collection target "
-    f"{collection_status.get('total_unique_tweets_last_24_hours', 0)}/"
-    f"{collection_status.get('target_tweets_last_24_hours', 0)} "
-    f"ready={collection_status.get('assignment_data_collection_ready')}"
-)
-
-missing_keywords = collection_status.get("missing_required_keywords") or []
-if missing_keywords:
-    st.warning(f"Missing required keyword coverage: {', '.join(missing_keywords)}")
-
-signal_metrics = st.columns(4)
-if latest_signal_frame.empty:
-    signal_metrics[0].metric("BUY Signals", 0)
-    signal_metrics[1].metric("SELL Signals", 0)
-    signal_metrics[2].metric("Neutral Signals", 0)
-    signal_metrics[3].metric("Avg Signal", 0.0)
-else:
-    latest_signal_frame = latest_signal_frame.copy()
-    signal_metrics[0].metric("BUY Signals", int((latest_signal_frame["composite_signal"] > 0).sum()))
-    signal_metrics[1].metric("SELL Signals", int((latest_signal_frame["composite_signal"] < 0).sum()))
-    signal_metrics[2].metric("Neutral Signals", int((latest_signal_frame["composite_signal"] == 0).sum()))
-    signal_metrics[3].metric("Avg Signal", round(float(latest_signal_frame["composite_signal"].mean()), 3))
 
 if signal_frame.empty:
     st.info("No keyword signals have been generated yet. Run the scraper first.")
