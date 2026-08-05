@@ -15,6 +15,9 @@ from app.core.config import settings
 CRON_MARKER = "market-intelligence-jobs"
 CRON_START = f"# BEGIN {CRON_MARKER}"
 CRON_END = f"# END {CRON_MARKER}"
+LEGACY_CRON_MARKER = "market-intelligence-scraper"
+LEGACY_CRON_START = f"# BEGIN {LEGACY_CRON_MARKER}"
+LEGACY_CRON_END = f"# END {LEGACY_CRON_MARKER}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,16 +91,16 @@ def render_managed_block(specs: tuple[CronJobSpec, ...]) -> str:
 
 
 def strip_managed_block(crontab_text: str) -> str:
-    """Remove the managed cron block from an existing crontab."""
+    """Remove the managed cron blocks from an existing crontab."""
     lines = crontab_text.splitlines()
     result: list[str] = []
     in_block = False
     for line in lines:
         stripped = line.strip()
-        if stripped == CRON_START:
+        if stripped in {CRON_START, LEGACY_CRON_START}:
             in_block = True
             continue
-        if stripped == CRON_END:
+        if stripped in {CRON_END, LEGACY_CRON_END}:
             in_block = False
             continue
         if not in_block:

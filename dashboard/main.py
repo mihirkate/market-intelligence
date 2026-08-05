@@ -47,9 +47,11 @@ def enable_auto_refresh(*, seconds: int) -> None:
 st.title(settings.DASHBOARD_TITLE)
 st.subheader(settings.DASHBOARD_STATUS_LABEL)
 st.success(settings.DASHBOARD_STATUS)
-if settings.DASHBOARD_AUTO_REFRESH_ENABLED:
-    enable_auto_refresh(seconds=settings.DASHBOARD_AUTO_REFRESH_SECONDS)
-    st.caption(f"Auto refresh enabled every {settings.DASHBOARD_AUTO_REFRESH_SECONDS} seconds.")
+dashboard_auto_refresh_enabled = getattr(settings, "DASHBOARD_AUTO_REFRESH_ENABLED", True)
+dashboard_auto_refresh_seconds = getattr(settings, "DASHBOARD_AUTO_REFRESH_SECONDS", 30)
+if dashboard_auto_refresh_enabled:
+    enable_auto_refresh(seconds=dashboard_auto_refresh_seconds)
+    st.caption(f"Auto refresh enabled every {dashboard_auto_refresh_seconds} seconds.")
 
 try:
     repository = TweetRepository()
@@ -158,7 +160,7 @@ else:
         )
         .properties(height=320)
     )
-    st.altair_chart(signal_chart, use_container_width=True)
+    st.altair_chart(signal_chart, width="stretch")
 
     st.dataframe(
         latest_signal_frame[
@@ -172,7 +174,7 @@ else:
                 "confidence_interval_high",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -199,7 +201,7 @@ else:
         )
         .properties(height=280)
     )
-    st.altair_chart(volume_chart, use_container_width=True)
+    st.altair_chart(volume_chart, width="stretch")
 
 st.markdown("### Top Influencers")
 if influencer_frame.empty:
@@ -216,7 +218,7 @@ else:
                 "latest_timestamp_utc",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -251,6 +253,6 @@ else:
                 "indian_script_ratio",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
