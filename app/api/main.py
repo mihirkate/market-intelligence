@@ -8,7 +8,6 @@ import json
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import pandas as pd
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
@@ -27,25 +26,6 @@ def _get_reporter(request: Request) -> CollectionStatusReporter:
 
 def _get_analysis_reporter(request: Request) -> AnalysisReporter:
     return request.app.state.analysis_reporter
-
-
-def _signal_bias_summary(frame: pd.DataFrame) -> dict[str, object]:
-    """Return a compact signal-bias summary for lightweight dashboard polling."""
-    if frame.empty or "composite_signal" not in frame.columns:
-        return {
-            "buy_keywords": 0,
-            "sell_keywords": 0,
-            "neutral_keywords": 0,
-            "avg_composite_signal": 0.0,
-        }
-
-    composite = frame["composite_signal"].fillna(0.0)
-    return {
-        "buy_keywords": int((composite > 0).sum()),
-        "sell_keywords": int((composite < 0).sum()),
-        "neutral_keywords": int((composite == 0).sum()),
-        "avg_composite_signal": round(float(composite.mean()), 6),
-    }
 
 
 @asynccontextmanager
@@ -123,62 +103,6 @@ def read_dashboard_state(request: Request) -> JSONResponse:
         "latest_seen_at": overview.get("latest_seen_at"),
         "latest_run_id": latest_run.get("run_id"),
         "latest_run_status": latest_run.get("status"),
-    }
-    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
-
-
-@app.get("/dashboard-summary")
-def read_dashboard_summary(request: Request) -> JSONResponse:
-    """Return the compact numeric dashboard summary for in-place metric updates."""
-    repository = _get_repository(request)
-    reporter = _get_reporter(request)
-    overview = repository.load_dashboard_overview()
-    collection_status = reporter.read_report() or reporter.build_status()
-    latest_signals = repository.load_latest_signal_snapshot(limit=settings.REPORT_TOP_LIMIT)
-    latest_run = overview.get("latest_run") or {}
-    payload = {
-        "overview": {
-            "total_tweets": int(overview.get("total_tweets") or 0),
-            "unique_users": int(overview.get("unique_users") or 0),
-            "tracked_keywords": int(overview.get("tracked_keywords") or 0),
-            "latest_seen_at": overview.get("latest_seen_at"),
-        },
-        "latest_run": {
-            "run_id": latest_run.get("run_id"),
-            "status": latest_run.get("status"),
-            "fetched_count": int(latest_run.get("fetched_count") or 0),
-            "inserted_count": int(latest_run.get("inserted_count") or 0),
-            "updated_count": int(latest_run.get("updated_count") or 0),
-            "duplicate_count": int(latest_run.get("duplicate_count") or 0),
-        },
-        "collection": {
-            "total_unique_tweets_last_24_hours": int(
-                collection_status.get("total_unique_tweets_last_24_hours", 0) or 0
-            ),
-            "remaining_tweets_to_target": int(
-                collection_status.get("remaining_tweets_to_target", 0) or 0
-            ),
-            "projected_24h_tweets_recent_rate": int(
-                collection_status.get("projected_24h_tweets_recent_rate", 0) or 0
-            ),
-            "recent_rate_limit_events": int(
-                collection_status.get("recent_rate_limit_events", 0) or 0
-            ),
-            "recent_tweets_per_hour": float(
-                collection_status.get("recent_tweets_per_hour", 0) or 0
-            ),
-            "required_tweets_per_hour_for_target": float(
-                collection_status.get("required_tweets_per_hour_for_target", 0) or 0
-            ),
-            "target_tweets_last_24_hours": int(
-                collection_status.get("target_tweets_last_24_hours", 0) or 0
-            ),
-            "assignment_data_collection_ready": bool(
-                collection_status.get("assignment_data_collection_ready", False)
-            ),
-            "missing_required_keywords": collection_status.get("missing_required_keywords") or [],
-        },
-        "signal_bias": _signal_bias_summary(latest_signals),
     }
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 

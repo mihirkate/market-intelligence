@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-import pandas as pd
 
 import app.api.main as api_main
 
@@ -43,22 +42,10 @@ class FakeRepository:
             },
         }
 
-    def load_latest_signal_snapshot(self, *, limit: int) -> pd.DataFrame:
-        return pd.DataFrame.from_records(
-            [
-                {"keyword": "#nifty50", "composite_signal": 0.25},
-                {"keyword": "#sensex", "composite_signal": -0.10},
-                {"keyword": "#intraday", "composite_signal": 0.0},
-            ]
-        )
-
 
 class FakeReporter:
     def __init__(self, repository=None) -> None:
         self.repository = repository
-
-    def read_report(self) -> dict[str, object] | None:
-        return None
 
     def build_status(self, latest_summary=None) -> dict[str, object]:
         return {
@@ -147,33 +134,6 @@ def test_dashboard_state_endpoint_returns_lightweight_refresh_payload(monkeypatc
     assert payload["latest_seen_at"] == "2026-08-04T12:00:00+00:00"
     assert payload["latest_run_id"] == "run-1"
     assert payload["latest_run_status"] == "completed"
-    assert response.headers["cache-control"] == "no-store"
-
-
-def test_dashboard_summary_endpoint_returns_live_metric_payload(monkeypatch) -> None:
-    repository = FakeRepository()
-    reporter = FakeReporter(repository=repository)
-    analysis_reporter = FakeAnalysisReporter()
-    monkeypatch.setattr(api_main, "TweetRepository", lambda: repository)
-    monkeypatch.setattr(api_main, "CollectionStatusReporter", lambda repository=None: reporter)
-    monkeypatch.setattr(
-        api_main,
-        "AnalysisReporter",
-        lambda repository=None, collection_status_reporter=None: analysis_reporter,
-    )
-
-    with TestClient(api_main.app) as client:
-        response = client.get("/dashboard-summary")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["overview"]["total_tweets"] == 42
-    assert payload["latest_run"]["inserted_count"] == 8
-    assert payload["collection"]["remaining_tweets_to_target"] == 1958
-    assert payload["collection"]["missing_required_keywords"] == ["#banknifty"]
-    assert payload["signal_bias"]["buy_keywords"] == 1
-    assert payload["signal_bias"]["sell_keywords"] == 1
-    assert payload["signal_bias"]["neutral_keywords"] == 1
     assert response.headers["cache-control"] == "no-store"
 
 
