@@ -1,26 +1,37 @@
-# How To Install And Test
+# How To Install
 
-This guide installs the current `market-intelligence` project on a local machine
-or an Ubuntu server.
+This is the primary installation guide for a recruiter or reviewer running the project on their own machine.
 
-The deployment model is:
+The recommended path is:
 
-- `systemd` keeps the FastAPI API running persistently
-- `systemd` keeps the Streamlit dashboard running persistently
-- `cron` only triggers the short-lived scraper job
+- use a Python virtual environment
+- use MongoDB locally or MongoDB Atlas
+- use the same `venv`-based flow on both local machines and Ubuntu servers
 
-## 1. Requirements
+The current live deployment referenced in the docs is hosted on AWS EC2.
 
-- Ubuntu or another Linux system
-- Python `3.12+`
-- Network access to MongoDB Atlas
-- Valid X credentials for `twscrape`
+## 1. Supported Setup
 
-## 2. Clone Or Copy The Project
+| Item | Recommended |
+| --- | --- |
+| OS | Ubuntu 22.04+/24.04+, macOS, or Windows with WSL2 |
+| Python | 3.12 recommended |
+| pip | current version inside `.venv` |
+| Database | MongoDB Community or MongoDB Atlas |
+| Live scraping | one valid X account/session |
+| Monitoring email | optional Gmail app password |
+
+Notes:
+
+- The codebase has been exercised on Python `3.12` locally and on an Ubuntu server with Python `3.14`.
+- The current public demo/server is hosted on AWS EC2.
+- All Python package versions are pinned in [`requirements.txt`](requirements.txt).
+- On a server, still use `.venv`; do not install project dependencies globally.
+
+## 2. Clone The Repository
 
 ```bash
-cd ~
-git clone <your-repo-url> market-intelligence
+git clone <repo-url> market-intelligence
 cd market-intelligence
 ```
 
@@ -30,9 +41,7 @@ If the repo is already present:
 cd ~/market-intelligence
 ```
 
-## 3. Local Installation
-
-Create the virtual environment and install dependencies:
+## 3. Create The Virtual Environment
 
 ```bash
 python3 -m venv .venv
@@ -41,375 +50,362 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Create the runtime env file:
+This is the recommended dependency isolation model for both local evaluation and Ubuntu server deployment.
 
-```bash
-cp .env.example .env
-```
+## 4. Choose The Evaluation Mode
 
-Edit `.env` and set at minimum:
+There are two practical paths for a reviewer.
 
-- `MONGODB_URI`
-- `X_USERNAME`
-- `X_AUTH_TOKEN`
-- `X_CT0`
+### Option A: Code Validation Only
 
-Optional but recommended:
-
-- `MAX_TWEETS_PER_RUN=60`
-- `DISCOVERY_LIMIT_PER_KEYWORD=25`
-- `CRON_SCHEDULE=*/5 * * * *`
-- `KEYWORD_CONCURRENCY=1`
-- `ALERT_EMAIL_TO=work.mihirkate@gmail.com`
-- `SMTP_HOST=smtp.gmail.com`
-- `SMTP_PORT=587`
-- `SMTP_USERNAME=your_gmail_address`
-- `SMTP_PASSWORD=your_gmail_app_password`
-
-Bootstrap the local `twscrape` account database:
-
-```bash
-python -m app.scraper.twscrape_setup
-```
-
-## 4. Run Locally
-
-Start the API:
-
-```bash
-source .venv/bin/activate
-uvicorn app.api.main:app --host 0.0.0.0 --port 8000
-```
-
-In another terminal, start the dashboard:
-
-```bash
-cd ~/market-intelligence
-source .venv/bin/activate
-streamlit run dashboard/main.py
-```
-
-The dashboard auto-refreshes by default every `30` seconds. Control that with:
-
-- `DASHBOARD_AUTO_REFRESH_ENABLED=true`
-- `DASHBOARD_AUTO_REFRESH_SECONDS=30`
-
-Useful checks:
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/stats
-python -m app.scraper.account_status
-python -m app.scraper.collection_status
-```
-
-## 5. Local Testing
-
-Backend API:
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/stats
-curl http://127.0.0.1:8000/collection-status
-curl http://127.0.0.1:8000/analysis-summary
-```
-
-Dashboard:
-
-- open `http://127.0.0.1:8501`
-- verify counters load
-- wait `30` seconds and confirm the page refreshes automatically
-- confirm the latest run and 24h collected metrics update after a scrape run
-
-Scraper:
-
-```bash
-python -m app.scraper.account_status
-python -m app.scraper.manager
-python -m app.scraper.collection_status
-cat reports/data_collection_status.json
-```
-
-Repo verification:
-
-```bash
-pytest -q
-python -m compileall app tests run.py dashboard
-```
-
-## 6. Ubuntu Server Installation
-
-The repo includes deployment scripts for Ubuntu.
+Use this if the reviewer wants to validate code quality, tests, and repository structure without configuring MongoDB or X credentials.
 
 Run:
 
 ```bash
-cd ~/market-intelligence
-bash deploy/bootstrap_server.sh
+source .venv/bin/activate
+pytest -q
+python -m compileall app tests run.py dashboard
+```
+
+This is enough to verify:
+
+- repository structure
+- import correctness
+- test coverage for core logic
+- FastAPI/dashboard module entrypoints
+- storage/reporting/monitoring logic at unit-test level
+
+### Option B: Full Local Run
+
+Use this if the reviewer wants the collector, API, dashboard, MongoDB storage, and reports running end to end.
+
+This requires:
+
+- a reachable MongoDB instance
+- valid X auth for `twscrape`
+
+## 5. Configure `.env`
+
+Start from the checked-in template:
+
+```bash
 cp .env.example .env
 ```
 
-Edit `.env` and verify:
+For a local machine, the simplest setup is:
 
-- `API_HOST=0.0.0.0`
-- `API_PORT=8000`
-- `DASHBOARD_HOST=0.0.0.0`
-- `DASHBOARD_PORT=8501`
-- `DASHBOARD_AUTO_REFRESH_ENABLED=true`
-- `DASHBOARD_AUTO_REFRESH_SECONDS=30`
-- `MONGODB_URI=...`
-- valid X auth values
-- `KEYWORD_CONCURRENCY=1`
-- `CRON_SCHEDULE=*/5 * * * *`
-- `MAX_TWEETS_PER_RUN=60`
-- `DISCOVERY_LIMIT_PER_KEYWORD=25`
-- `ALERT_EMAIL_TO=work.mihirkate@gmail.com`
-- `SMTP_HOST=smtp.gmail.com`
-- `SMTP_PORT=587`
-- `SMTP_USERNAME=your_gmail_address`
-- `SMTP_PASSWORD=your_gmail_app_password`
-- `MONITOR_RESTART_SERVICES=true`
-- `MONITOR_REBOOT_ON_CRITICAL=false`
-- `WATCHDOG_SCHEDULE=*/2 * * * *`
-- `HEALTH_REPORT_SCHEDULE=0 * * * *`
+```dotenv
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DATABASE=market-intelligence
+SCRAPER_ENGINE=twscrape
+KEYWORD_CONCURRENCY=1
+CRON_SCHEDULE=*/10 * * * *
+DASHBOARD_AUTO_REFRESH_ENABLED=true
+DASHBOARD_AUTO_REFRESH_SECONDS=30
+```
 
-If you want the host to reboot itself after repeated failed recovery attempts,
-set:
+For X authentication, fill one supported path:
 
-- `MONITOR_REBOOT_ON_CRITICAL=true`
-- `MONITOR_FAILURES_BEFORE_REBOOT=3`
+### Path 1: `X_USERNAME` + `X_AUTH_TOKEN` + `X_CT0`
 
-Bootstrap `twscrape`:
+```dotenv
+X_USERNAME=your_x_handle
+X_AUTH_TOKEN=your_auth_token
+X_CT0=your_ct0_token
+```
+
+### Path 2: `X_USERNAME` + `X_COOKIES`
+
+```dotenv
+X_USERNAME=your_x_handle
+X_COOKIES='auth_token=...; ct0=...; ...'
+```
+
+### Path 3: Password-based login
+
+```dotenv
+X_USERNAME=your_x_handle
+X_PASSWORD=your_x_password
+X_EMAIL=your_email
+X_EMAIL_PASSWORD=your_email_password
+```
+
+### Path 4: Multi-account setup
+
+```dotenv
+X_ACCOUNTS_JSON=[{"username":"acct_one","auth_token":"token-1","ct0":"ct0-1"},{"username":"acct_two","auth_token":"token-2","ct0":"ct0-2"}]
+```
+
+Important:
+
+- use only one auth path unless you know exactly why you are mixing them
+- `X_ACCOUNTS_JSON` is the preferred path if you want better scrape throughput
+- do not commit real secrets into `.env`
+
+## 6. MongoDB Requirement
+
+For a full local run, the API and dashboard need MongoDB.
+
+You can use either:
+
+- local MongoDB Community Server on `mongodb://localhost:27017/`
+- MongoDB Atlas via `MONGODB_URI=mongodb+srv://...`
+
+The expected database name is:
+
+```dotenv
+MONGODB_DATABASE=market-intelligence
+```
+
+If MongoDB is unavailable, the API is expected to fail fast instead of starting in a partially broken state.
+
+## 7. Bootstrap `twscrape`
+
+Once `.env` is configured:
 
 ```bash
 source .venv/bin/activate
 python -m app.scraper.twscrape_setup
 ```
 
-Install the API and dashboard as `systemd` services:
+Expected result:
+
+- `data/twscrape/accounts.db` is created
+- the configured X account(s) are written into the local `twscrape` DB
+
+Optional inspection:
+
+```bash
+python -m app.scraper.account_status
+```
+
+This prints account state and any current `SearchTimeline` lock/cooldown.
+
+## 8. Run A Full Local Collection
+
+```bash
+source .venv/bin/activate
+python -m app.scraper.manager
+python -m app.scraper.collection_status
+```
+
+Expected outputs:
+
+- raw fetched tweets: `data/raw/date=YYYY-MM-DD/`
+- parquet tweets: `data/parquet/tweets/`
+- parquet signals: `data/parquet/signals/`
+- collection report: `reports/data_collection_status.json`
+- processing report: `reports/processing_report.json`
+- analysis report: `reports/analysis_summary.json`
+
+The collector is designed as a bounded run, not an infinite process. Repeated runs or cron scheduling are expected.
+
+## 9. Start The API And Dashboard
+
+Terminal 1:
+
+```bash
+source .venv/bin/activate
+python run.py
+```
+
+Terminal 2:
+
+```bash
+source .venv/bin/activate
+streamlit run dashboard/main.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Verify:
+
+```bash
+curl http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/stats
+curl http://127.0.0.1:8000/dashboard-state
+```
+
+Open in the browser:
+
+- `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8501/`
+
+If the current AWS-hosted public demo server is still online, the reviewer can also check:
+
+- `http://13.60.241.241:8000/health`
+- `http://13.60.241.241:8501/`
+
+Note: this public IP is environment-specific and may change later.
+
+Behavior note:
+
+- the dashboard cards are rendered by Streamlit
+- the page polls a lightweight DB-backed count endpoint
+- the dashboard only reloads when `Stored Tweets` increases in MongoDB
+
+## 10. Optional Monitoring Email Setup
+
+If the reviewer wants to test watchdog and email reporting, add:
+
+```dotenv
+ALERT_EMAIL_TO=recipient@example.com
+ALERT_EMAIL_FROM=sender@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=sender@example.com
+SMTP_PASSWORD=your_gmail_app_password
+SMTP_USE_TLS=true
+WATCHDOG_SCHEDULE=*/2 * * * *
+HEALTH_REPORT_SCHEDULE=0 * * * *
+MONITOR_RESTART_SERVICES=true
+MONITOR_REBOOT_ON_CRITICAL=false
+```
+
+Then run:
+
+```bash
+source .venv/bin/activate
+python -m app.monitoring.watchdog_job
+python -m app.monitoring.hourly_report_job
+```
+
+## 11. Ubuntu Server Deployment
+
+Only use this section if the reviewer wants persistent deployment on Ubuntu.
+
+### 11.1 Bootstrap The Host
+
+```bash
+cd ~/market-intelligence
+bash deploy/bootstrap_server.sh
+```
+
+Then create or update `.env` in the project root and keep using the project `.venv`.
+
+### 11.2 Prepare Runtime Config
+
+At minimum, confirm:
+
+```dotenv
+API_HOST=0.0.0.0
+API_PORT=8000
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=8501
+MONGODB_URI=...
+MONGODB_DATABASE=market-intelligence
+```
+
+And configure live scrape auth as described earlier.
+
+### 11.3 Bootstrap `twscrape`
+
+```bash
+source .venv/bin/activate
+python -m app.scraper.twscrape_setup
+```
+
+### 11.4 Install Persistent Services
 
 ```bash
 bash deploy/install_services.sh
 ```
 
-This is the persistent process manager for:
+This installs:
 
-- `uvicorn app.api.main:app --host 0.0.0.0 --port 8000`
-- `streamlit run dashboard/main.py --server.address 0.0.0.0 --server.port 8501`
+- `market-intelligence-api.service`
+- `market-intelligence-dashboard.service`
 
-Do not run either of those through `cron`.
-
-Install the scheduled scraper cron job:
+### 11.5 Install Scheduled Jobs
 
 ```bash
 bash deploy/install_cron.sh
 ```
 
-Run a live check:
+This installs one managed cron block for:
 
-```bash
-bash deploy/check_live.sh
-```
+- the short-lived scraper run
+- the watchdog job
+- the health-report email job
 
-The installed cron block now includes:
+### 11.6 Open Network Ports
 
-- the scraper job
-- the watchdog job that checks API/dashboard health and restarts services if needed
-- the hourly health email job
-
-## 7. Service Management
-
-Check service status:
-
-```bash
-sudo systemctl status market-intelligence-api --no-pager
-sudo systemctl status market-intelligence-dashboard --no-pager
-```
-
-Restart services:
-
-```bash
-sudo systemctl restart market-intelligence-api
-sudo systemctl restart market-intelligence-dashboard
-```
-
-View logs:
-
-```bash
-journalctl -u market-intelligence-api -n 100 --no-pager
-journalctl -u market-intelligence-dashboard -n 100 --no-pager
-tail -f logs/app.log
-tail -f logs/cron.log
-```
-
-The persistent deployment model is:
-
-- `market-intelligence-api.service` keeps the FastAPI process alive
-- `market-intelligence-dashboard.service` keeps the Streamlit process alive
-- `cron` starts only the short-lived collector job
-
-If either web service exits, `systemd` restarts it automatically.
-
-If the watchdog sees that a service restarted or became unhealthy, it sends an
-email with service status and log excerpts, then attempts recovery.
-
-## 8. Cron Verification
-
-Check the installed cron entry:
-
-```bash
-crontab -l
-python -m app.scheduler.cron status
-```
-
-The scraper runs as a short-lived job and should:
-
-- respect cooldowns
-- skip overlapping runs
-- update `reports/data_collection_status.json`
-- leave the API and dashboard lifecycle to `systemd`
-- run the watchdog on `WATCHDOG_SCHEDULE`
-- send the hourly health email on `HEALTH_REPORT_SCHEDULE`
-
-## 9. Public Access
-
-If you expose the app directly by server IP:
-
-- API: `http://SERVER_IP:8000/health`
-- Dashboard: `http://SERVER_IP:8501`
-
-On AWS, allow inbound traffic for:
+For a public server, allow inbound TCP:
 
 - `8000`
 - `8501`
 
-Useful checks from your laptop:
+If using AWS EC2, these must be opened in the instance security group. If `ufw` is enabled, allow the ports there too.
 
-```bash
-curl http://SERVER_PUBLIC_IP:8000/health
-curl http://SERVER_PUBLIC_IP:8000/stats
-curl -I http://SERVER_PUBLIC_IP:8501
-```
-
-The recruiter-facing dashboard should be:
-
-- reachable at `http://SERVER_PUBLIC_IP:8501`
-- refreshed automatically every `DASHBOARD_AUTO_REFRESH_SECONDS`
-- backed by live MongoDB data updated by cron scraper runs
-
-## 10. Server Testing
-
-After deployment, run these on the server:
+### 11.7 Verify The Deployed Services
 
 ```bash
 sudo systemctl status market-intelligence-api --no-pager
 sudo systemctl status market-intelligence-dashboard --no-pager
+python -m app.scraper.collection_status
+curl http://127.0.0.1:8000/health
+curl -I http://127.0.0.1:8501
 crontab -l
+```
+
+If the host has a public IP:
+
+- API: `http://<public-ip>:8000/`
+- dashboard: `http://<public-ip>:8501/`
+
+## 12. Recommended Reviewer Flow
+
+If the reviewer has limited time, use this order:
+
+1. `pytest -q`
+2. `python -m compileall app tests run.py dashboard`
+3. inspect `README.md`, `how_to_install.md`, and `tests/HowToTest.md`
+4. if MongoDB and X credentials are available, run `python -m app.scraper.manager`
+5. start the API and dashboard
+6. inspect `reports/data_collection_status.json` and the dashboard
+
+## 13. Common Setup Failures
+
+### `RuntimeError: No twscrape account is configured`
+
+- `.env` does not contain a valid X auth path
+- fill one supported auth combination and rerun `python -m app.scraper.twscrape_setup`
+
+### `No account available for queue "SearchTimeline"`
+
+- the current X account is rate-limited
+- inspect:
+
+```bash
 python -m app.scraper.account_status
-python -m app.scraper.collection_status
-cat reports/data_collection_status.json
 ```
 
-Manual smoke run for the scraper:
+- wait for the lock to expire or add more accounts
+
+### `pymongo.errors.ServerSelectionTimeoutError`
+
+- MongoDB is unreachable
+- fix `MONGODB_URI`
+- for Atlas, verify credentials and IP/network access
+
+### API starts but dashboard does not
+
+- make sure MongoDB is reachable
+- verify:
 
 ```bash
-python -m app.scraper.manager
-python -m app.scraper.collection_status
+curl http://127.0.0.1:8000/health
 ```
 
-Manual smoke run for monitoring:
+- then restart Streamlit
+
+### No email is sent
+
+- use a Gmail app password, not the normal Gmail password
+- verify `SMTP_USERNAME`, `SMTP_PASSWORD`, `ALERT_EMAIL_TO`
+- inspect:
 
 ```bash
-python -m app.monitoring.watchdog_job
-python -m app.monitoring.hourly_report_job
+tail -n 100 logs/watchdog.log
+tail -n 100 logs/health-report.log
 ```
-
-What to verify:
-
-- API returns HTTP `200`
-- dashboard opens publicly
-- dashboard auto-refreshes without manual reload
-- `reports/data_collection_status.json` updates after scraper runs
-- `recent_run_count` increases over time
-- `total_unique_tweets_last_24_hours` moves upward
-- services survive disconnects because `systemd` owns them
-- the alert email arrives at `ALERT_EMAIL_TO`
-- the hourly health email arrives every hour
-
-## 11. Files To Watch
-
-- `logs/app.log`
-- `logs/cron.log`
-- `reports/data_collection_status.json`
-- `reports/processing_report.json`
-- `reports/analysis_summary.json`
-- `reports/performance_benchmark.json`
-
-## 12. Completion Check
-
-The data-collection requirement is complete only when:
-
-- `reports/data_collection_status.json` shows
-  `assignment_data_collection_ready: true`
-- `total_unique_tweets_last_24_hours >= 2000`
-
-## 13. Common Problems
-
-Missing `crontab` command:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y cron
-sudo systemctl enable --now cron
-```
-
-MongoDB connection problems:
-
-- verify `MONGODB_URI`
-- verify Atlas network allowlist
-- verify the server can reach Atlas
-
-X account rate-limited:
-
-- check `python -m app.scraper.account_status`
-- inspect `data/raw/checkpoint.json`
-- inspect `data/raw/debug/`
-- wait for cooldown and let cron continue
-
-Dashboard does not refresh:
-
-- confirm `DASHBOARD_AUTO_REFRESH_ENABLED=true`
-- confirm `DASHBOARD_AUTO_REFRESH_SECONDS=30`
-- restart the dashboard service
-- check browser dev tools for blocked scripts/extensions
-
-API or dashboard not persistent:
-
-- do not run them under `cron`
-- use `bash deploy/install_services.sh`
-- verify `sudo systemctl status market-intelligence-api --no-pager`
-- verify `sudo systemctl status market-intelligence-dashboard --no-pager`
-
-Email alert does not arrive:
-
-- verify `ALERT_EMAIL_TO`
-- verify `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`
-- if using Gmail, use an app password, not the account password
-- run `python -m app.monitoring.hourly_report_job`
-- inspect `logs/health-report.log` and `logs/watchdog.log`
-
-Whole EC2 instance crash:
-
-- the watchdog can restart services and can optionally trigger `reboot` if the host is still alive
-- if the entire VM is hard-down, in-instance code cannot recover it by itself
-- for full instance recovery, add AWS EC2 auto-recovery / CloudWatch outside this repo
-
-## 14. Submission Cleanup
-
-Before pushing the repo:
-
-```bash
-bash scripts/prepare_submission.sh
-```
-
-Then review [docs/submission_checklist.md](/home/mihir/market-intelligence/docs/submission_checklist.md).
