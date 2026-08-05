@@ -92,8 +92,30 @@ class TwscrapeEngine(ScraperEngine):
 
     async def _search_many_async(self, keywords: tuple[str, ...], limit: int) -> dict[str, list[TweetRecord]]:
         await self._ensure_account_async()
-        semaphore = asyncio.Semaphore(max(1, settings.KEYWORD_CONCURRENCY))
         window_start, window_end = self._window_bounds()
+        account_count = await self._active_account_count()
+        keyword_concurrency = self._keyword_concurrency_limit(account_count)
+
+        if keyword_concurrency == 1:
+            if len(keywords) > 1:
+                logger.info(
+                    "Using sequential keyword fetch active_accounts=%s configured_concurrency=%s",
+                    account_count,
+                    settings.KEYWORD_CONCURRENCY,
+                )
+            results: dict[str, list[TweetRecord]] = {}
+            for keyword in keywords:
+                query = self._build_query(keyword, window_start=window_start)
+                results[keyword] = await self._fetch_keyword_records(
+                    keyword,
+                    query=query,
+                    limit=limit,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+            return results
+
+        semaphore = asyncio.Semaphore(keyword_concurrency)
 
         async def fetch(keyword: str) -> tuple[str, list[TweetRecord]]:
             async with semaphore:
@@ -109,6 +131,18 @@ class TwscrapeEngine(ScraperEngine):
 
         pairs = await asyncio.gather(*(fetch(keyword) for keyword in keywords))
         return dict(pairs)
+
+    async def _active_account_count(self) -> int:
+        accounts = await self.api.pool.get_all()
+        if not accounts:
+            return 1
+
+        active_count = len([account for account in accounts if getattr(account, "active", True)])
+        return max(1, active_count or len(accounts))
+
+    def _keyword_concurrency_limit(self, account_count: int) -> int:
+        configured = max(1, settings.KEYWORD_CONCURRENCY)
+        return max(1, min(configured, max(1, account_count)))
 
     async def _fetch_keyword_records(
         self,
